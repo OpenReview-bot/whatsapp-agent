@@ -50,7 +50,7 @@ function setup(options: {
     fetch: (async () => {
       fetchCalls++;
       throw new Error('Outbound Meta API must never run during webhook routing');
-    }) as typeof fetch
+    }) as unknown as typeof fetch
   });
   registerMetaCloudWebhookRoutes(app, meta);
   return { app, meta, outboundCalls: () => fetchCalls };

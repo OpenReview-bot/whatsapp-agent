@@ -19,7 +19,7 @@ function runInstallerPatch(source: string) {
     stdout: 'pipe',
     stderr: 'pipe'
   });
-  return { result, source: readFileSync(target, 'utf8'), stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+  return { result, source: readFileSync(target, 'utf8'), stdout: result.stdout?.toString() ?? '', stderr: result.stderr?.toString() ?? '' };
 }
 
 afterEach(() => {

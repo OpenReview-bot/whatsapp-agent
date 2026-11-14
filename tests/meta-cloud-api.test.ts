@@ -388,7 +388,7 @@ describe('Meta Cloud API acceptance ambiguity', () => {
     const rejected = client({ fetcher: fakeFetch(() => Response.json({
       error: { message: 'provider message with sensitive data' }
     }, { status: 403 })).fetcher });
-    const timedOut = client({ fetcher: (async () => { throw new Error('internal credential detail'); }) as typeof fetch });
+    const timedOut = client({ fetcher: (async () => { throw new Error('internal credential detail'); }) as unknown as typeof fetch });
     const input = { to: recipient, text: 'Hi', lastInboundAtMs: fixedNow - 1_000 };
     for (const transport of [noId, rejected, timedOut]) {
       try {

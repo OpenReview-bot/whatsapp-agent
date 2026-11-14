@@ -23,13 +23,13 @@ describe('B2 A08 to S01 official Meta runtime composition', () => {
       capabilityAutopilotBrandId: 'store',
       metaCloud: {
         config: META_CONFIG,
-        fetch: async (_url, init) => {
+        fetch: (async (_url: RequestInfo | URL, init?: RequestInit) => {
           transportRequests.push(JSON.parse(String(init?.body)));
           return new Response(JSON.stringify({ messages: [{ id: 'wamid.proactive-one' }] }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' }
           });
-        }
+        }) as unknown as typeof fetch
       },
       proactiveEligibility: async (trigger, now) => ({
         now,
@@ -100,10 +100,10 @@ describe('B2 A08 to S01 official Meta runtime composition', () => {
       transport: 'meta-cloud', capabilityAutopilotBrandId: 'store',
       metaCloud: {
         config: META_CONFIG,
-        fetch: async () => {
+        fetch: (async () => {
           networkCalls++;
           return new Response(JSON.stringify({ messages: [{ id: 'wamid.forbidden' }] }));
-        }
+        }) as unknown as typeof fetch
       },
       proactiveEligibility: async (trigger, now) => ({
         now, channel: 'meta-cloud',

@@ -87,7 +87,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
   it('fails open when the API response is incomplete or configuration is invalid', async () => {
     const malformed = await routeTurnModel({
       message: 'مرحبا', apiKey: 'synthetic-test-key', externalRoutingAllowed: true,
-      fetchFn: (async () => new Response(JSON.stringify({ label: 'complex', confidence: 1 }))) as typeof fetch
+      fetchFn: (async () => new Response(JSON.stringify({ label: 'complex', confidence: 1 }))) as unknown as typeof fetch
     });
     expect(malformed.bypassed).toBe(true);
     expect(malformed.confidence).toBe(0);
@@ -96,7 +96,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
     const invalid = await routeTurnModel({
       message: 'مرحبا', apiKey: 'synthetic-test-key', externalRoutingAllowed: true,
       confidenceThreshold: Number.NaN,
-      fetchFn: (async () => { called = true; throw Error('unexpected'); }) as typeof fetch
+      fetchFn: (async () => { called = true; throw Error('unexpected'); }) as unknown as typeof fetch
     });
     expect(called).toBe(false);
     expect(invalid.bypassed).toBe(true);
@@ -105,7 +105,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
   it.each([401, 403, 429, 503])('fails open on optional router HTTP %s without exposing content', async status => {
     const decision = await routeTurnModel({
       message: 'رقم طلب خاص', apiKey: 'synthetic-test-key', externalRoutingAllowed: true,
-      fetchFn: (async () => new Response('untrusted gateway error', { status })) as typeof fetch
+      fetchFn: (async () => new Response('untrusted gateway error', { status })) as unknown as typeof fetch
     });
     expect(decision.bypassed).toBe(true);
     expect(decision.selectedModel).toBe('gemini-3.8-flash');
@@ -124,7 +124,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
       fetchFn: (async (_url: string | URL | Request, init?: RequestInit) => {
         outgoing = JSON.parse(String(init?.body));
         return new Response(JSON.stringify(officialChoice('standard')), { status: 200 });
-      }) as typeof fetch
+      }) as unknown as typeof fetch
     });
     expect(outgoing.state).toContain('[REDACTED_PHONE]');
     expect(outgoing.state).toContain('[REDACTED_EMAIL]');
@@ -147,7 +147,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
     const decision = await routeTurnModel({
       message: 'hello', apiKey: 'synthetic-test-key', externalRoutingAllowed: true,
       timeoutMs: -1,
-      fetchFn: (async () => { called = true; throw Error('unexpected'); }) as typeof fetch
+      fetchFn: (async () => { called = true; throw Error('unexpected'); }) as unknown as typeof fetch
     });
     expect(called).toBe(false);
     expect(decision.bypassed).toBe(true);
@@ -160,7 +160,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
       apiKey: 'synthetic-test-key',
       externalRoutingAllowed: true,
       baseUrl: 'http://api.typesafe.ai/v1',
-      fetchFn: (async () => { requested = true; throw Error('must not fetch'); }) as typeof fetch
+      fetchFn: (async () => { requested = true; throw Error('must not fetch'); }) as unknown as typeof fetch
     });
     expect(requested).toBe(false);
     expect(decision.bypassed).toBe(true);
@@ -172,7 +172,7 @@ describe('TypeSafe System One OpenAPI contract', () => {
       message: 'my private customer data',
       apiKey: 'synthetic-test-key',
       externalRoutingAllowed: false,
-      fetchFn: (async () => { called = true; throw Error('must not call'); }) as typeof fetch
+      fetchFn: (async () => { called = true; throw Error('must not call'); }) as unknown as typeof fetch
     });
     expect(called).toBe(false);
     expect(decision.bypassed).toBe(true);

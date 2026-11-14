@@ -54,12 +54,12 @@ export class GeminiClient {
     try {
       if (!this.project) {
         const proc = Bun.spawn(['gcloud', 'config', 'get-value', 'project'], { stdout: 'pipe' });
-        this.project = (await new Response(proc.stdout).text()).trim() || undefined;
+        this.project = (await new Response(proc.stdout as unknown as BodyInit).text()).trim() || undefined;
       }
 
       // Fetch access token via gcloud CLI (active session)
       const tokenProc = Bun.spawn(['gcloud', 'auth', 'print-access-token'], { stdout: 'pipe' });
-      const token = (await new Response(tokenProc.stdout).text()).trim();
+      const token = (await new Response(tokenProc.stdout as unknown as BodyInit).text()).trim();
 
       if (token && token.length > 20) {
         this.accessToken = token;

@@ -52,7 +52,7 @@ describe('VoiceSynthesizer', () => {
       authProvider: async () => ({ token: 'local-test-token', project: 'local-test-project' }),
       fetcher: (async () => Response.json({ error: { message: 'simulated provider unavailable' } }, {
         status: 503
-      })) as typeof fetch
+      })) as unknown as typeof fetch
     });
     await expect(synth.synthesizeVoice('Testing failure')).rejects.toThrow('Google Cloud Text-to-Speech fallback failed (503)');
   });

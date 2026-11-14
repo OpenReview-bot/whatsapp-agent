@@ -329,7 +329,7 @@ describe('PostgreSQL cutover protection', () => {
         const guard = setTimeout(() => child.kill(), 3000);
         try {
           const code = await child.exited;
-          const diagnostic = await new Response(child.stderr).text();
+          const diagnostic = await new Response(child.stderr as unknown as BodyInit).text();
           expect(code).not.toBe(0);
           expect(diagnostic).toContain('PostgreSQL runtime cutover is not yet available');
           expect(existsSync(join(tempRoot, 'data'))).toBe(false);

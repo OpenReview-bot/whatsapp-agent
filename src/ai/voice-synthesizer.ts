@@ -46,7 +46,7 @@ export class VoiceSynthesizer {
           this.project = envProject.trim();
         } else {
           const proc = Bun.spawn(['gcloud', 'config', 'get-value', 'project'], { stdout: 'pipe' });
-          this.project = (await new Response(proc.stdout).text()).trim();
+          this.project = (await new Response(proc.stdout as unknown as BodyInit).text()).trim();
         }
         if (!this.project) {
           throw new Error('Google Cloud Project ID is not configured (set GOOGLE_CLOUD_PROJECT environment variable or configure gcloud)');
@@ -54,7 +54,7 @@ export class VoiceSynthesizer {
       }
 
       const tokenProc = Bun.spawn(['gcloud', 'auth', 'print-access-token'], { stdout: 'pipe' });
-      const token = (await new Response(tokenProc.stdout).text()).trim();
+      const token = (await new Response(tokenProc.stdout as unknown as BodyInit).text()).trim();
       this.accessToken = token;
       this.tokenExpiresAt = Date.now() + 50 * 60 * 1000;
 
@@ -78,7 +78,7 @@ export class VoiceSynthesizer {
         }
       );
 
-      const arrayBuf = await new Response(ffmpeg.stdout).arrayBuffer();
+      const arrayBuf = await new Response(ffmpeg.stdout as unknown as BodyInit).arrayBuffer();
       const exitCode = await ffmpeg.exited;
 
       if (exitCode === 0 && arrayBuf.byteLength > 0) {
