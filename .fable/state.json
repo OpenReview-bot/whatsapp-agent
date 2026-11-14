@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 107,
+  "stateRevision": 111,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 15,
-  "verifiedGeneration": 15,
+  "mutationGeneration": 16,
+  "verifiedGeneration": 16,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -466,7 +466,19 @@
       "generation": 15,
       "timestamp": "2026-11-14T16:30:28.291Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "451 pass, 1 skip, 0 fail; tsc --noEmit pass",
+      "repositoryRevision": "ad0b8a334458aef55a07a3983259218fc1cabdbf",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 16,
+      "timestamp": "2026-11-14T16:32:10.636Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-14T16:30:28.409Z"
+  "updatedAt": "2026-11-14T16:32:10.755Z"
 }
