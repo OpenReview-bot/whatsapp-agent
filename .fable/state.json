@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 119,
+  "stateRevision": 131,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 17,
-  "verifiedGeneration": 17,
+  "mutationGeneration": 20,
+  "verifiedGeneration": 20,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -502,7 +502,43 @@
       "generation": 17,
       "timestamp": "2026-11-17T20:09:43.798Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "Verified commit 660e20d",
+      "repositoryRevision": "660e20d2968922f9edb389442ced53fe46cbf52c",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 18,
+      "timestamp": "2026-11-17T20:10:25.532Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "Verified commit 9485ad7",
+      "repositoryRevision": "9485ad79f539181e5d5cf343e54f22262edfcfd4",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 19,
+      "timestamp": "2026-11-17T20:10:56.640Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "generation 20",
+      "repositoryRevision": "a3cc01185daeb5016f1f24584a5bc120e87f371e",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 20,
+      "timestamp": "2026-11-17T20:11:33.991Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-17T20:09:45.098Z"
+  "updatedAt": "2026-11-17T20:11:34.884Z"
 }
