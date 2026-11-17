@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+reason = "Dev dependency ReDoS in picomatch; upstream PR #194 merged/pending release, no patched npm release published yet"

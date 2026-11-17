@@ -87,8 +87,11 @@ ui/tests/artifacts/
 # Operating System & Editors
 .DS_Store
 .DS_Store?
+**/.DS_Store
 ._*
+**/._*
 Thumbs.db
+**/Thumbs.db
 .Spotlight-V100
 .Trashes
 .idea/
@@ -96,9 +99,17 @@ Thumbs.db
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
+.fleet/
+.zed/
+*.sublime-project
+*.sublime-workspace
 *.swp
 *.swo
 *~
+*.bak
+*.tmp
+*.patch
+*.diff
 
 # Agent Runtimes & Local Machine Artifacts
 .agentic-tdd-work-order.md
@@ -123,6 +134,8 @@ Thumbs.db
 .replit.md
 .roomodes
 .windsurfrules
+.fable/*.jsonl
+.fable/*.log
 .fable/events.jsonl
 .fable/learnings.json
 .fable/redteam-findings.json

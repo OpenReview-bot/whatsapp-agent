@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 111,
+  "stateRevision": 119,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 16,
-  "verifiedGeneration": 16,
+  "mutationGeneration": 17,
+  "verifiedGeneration": 17,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -478,7 +478,31 @@
       "generation": 16,
       "timestamp": "2026-11-14T16:32:10.636Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test && cd ui && bun run test:ui && bun run build && bun run security:audit",
+      "result": "pass",
+      "detail": "451 pass backend, 14 pass UI SSR, Vite built cleanly, OSV security audit clean with ui/osv-scanner.toml",
+      "repositoryRevision": "c9ead455fe0e31c72bbb8e30d4574f9b9cb33b71",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 16,
+      "timestamp": "2026-11-17T20:08:50.676Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "All tests and security audit pass on commit 0ad7846",
+      "repositoryRevision": "0ad78463f0617a1d8e45a75afdd729dc0989b297",
+      "commandCategory": "test",
+      "scope": "fable-verify",
+      "generation": 17,
+      "timestamp": "2026-11-17T20:09:43.798Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-14T16:32:10.755Z"
+  "updatedAt": "2026-11-17T20:09:45.098Z"
 }
