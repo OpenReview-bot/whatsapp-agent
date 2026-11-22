@@ -15,7 +15,7 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
   - *Autopilot*: Automatic responses with simulated typing delay.
   - *Copilot*: Draft preparation with confidence scores and reasoning traces for one-click human approval.
   - *Human*: Silent observation with manual operator control.
-- **Model Context Protocol (MCP)**: Native stdio and HTTP MCP server exposing 10 tools for Claude Desktop, Gemini CLI, Cursor, and custom agent integrations.
+- **Model Context Protocol (MCP)**: Native stdio MCP server exposing 12 tools (plus a 13th funnel tool when embedded with a funnel engine) for Claude Desktop, Gemini CLI, Cursor, and custom agent integrations. There is no HTTP MCP endpoint.
 - **Persistence and migration**: Chat, draft and capability runtime stores currently use SQLite WAL. PostgreSQL migration/import tooling and an optional PostgreSQL-backed learning-memory store exist; the complete runtime cutover is pending. See [Implementation status](docs/IMPLEMENTATION_STATUS.md).
 - **Web cockpit**: React 19 interface with Tailwind CSS, bilingual layout (Arabic RTL and English LTR), real-time Server-Sent Events (SSE), Brand Brain manager, and token-gated access.
 
@@ -111,25 +111,33 @@ To use WhatsApp Agent tools inside Claude Desktop, Cursor, or Gemini CLI, regist
 }
 ```
 
+The runner starts its own managed WhatsApp socket from the saved session (`DATA_DIR/session`) and waits up to `MCP_CONNECT_TIMEOUT_MS` (default 20000) for it to connect. If it does not connect, tools still start and `whatsapp_get_status` reports the real state. WhatsApp allows one live socket per session, so do not run the MCP runner while the main app (`bun run start`) uses the same `DATA_DIR`. Set `MCP_WHATSAPP_CHANNEL=none` to run the read and memory tools without opening a socket. Diagnostics go to stderr; stdout carries only the MCP protocol.
+
 ### Available MCP tools
 
-| Tool | Parameters | Description |
+The standalone runner registers these 12 tools. `whatsapp_funnel_scatter_gather` is registered only when a funnel engine is passed to `createWhatsAppMcpServer`, which the standalone runner does not do.
+
+| Tool | Required parameters | Description |
 |---|---|---|
-| `whatsapp_list_chats` | `limit?: number, unreadOnly?: boolean` | List active conversations, contact names, unread message counts, and current agent modes. |
-| `whatsapp_get_messages` | `chatId: string, limit?: number` | Retrieve message history, timestamps, sender IDs, and voice note transcriptions. |
-| `whatsapp_send_message` | `chatId: string, text: string, replyToMessageId?: string` | Send a WhatsApp message with simulated human typing cadence. |
-| `whatsapp_send_reaction` | `chatId: string, messageId: string, emoji: string` | Send an emoji reaction to a specific message. |
-| `whatsapp_get_status` | *(none)* | Inspect companion socket connection status, phone number, and pending drafts. |
-| `whatsapp_set_chat_mode` | `chatId: string, mode: "autopilot" \| "copilot" \| "human"` | Set agent operation mode for a specific conversation. |
-| `whatsapp_approve_draft` | `draftId: string, editedText?: string` | Approve and dispatch a pending copilot draft reply. |
-| `whatsapp_manage_memory` | `chatId: string, action: string, content?: string, index?: number` | Inspect, save, or delete long-term contact preferences with credential filtering. |
-| `whatsapp_set_chat_style` | `chatId: string, style: string` | Configure tone: `professional`, `casual`, `playful`, `assertive`, or `empathetic`. |
-| `whatsapp_funnel_scatter_gather` | `method: string, payload?: object, queryParams?: object` | Execute concurrent scatter-gather dispatch across external systems with circuit-breaking. |
+| `whatsapp_list_chats` | none (`limit?`, `unreadOnly?`) | List recent chats, contact names, unread counts, and agent modes. |
+| `whatsapp_get_messages` | `chatId` (`limit?`) | Retrieve message history, timestamps, sender IDs, and voice note transcriptions. |
+| `whatsapp_search_chat_memory` | `chatId`, `query` | Search one chat in raw messages and summarized historical folds. |
+| `whatsapp_get_chat_folds` | `chatId` | List historical session and milestone fold summaries for one chat. |
+| `whatsapp_decompress_fold` | `chatId`, `foldId` | Inspect the raw messages behind a fold, optionally around one referenced message. |
+| `whatsapp_send_message` | `chatId`, `text` (`replyToMessageId?`) | Send a message through the durable send ledger with simulated typing cadence. |
+| `whatsapp_send_reaction` | `chatId`, `messageId`, `emoji` | Send an emoji reaction to a message. |
+| `whatsapp_get_status` | none | Inspect socket connection status, phone number, and pending drafts. |
+| `whatsapp_set_chat_mode` | `chatId`, `mode` (`autopilot`, `copilot`, `human`) | Set agent operation mode for a chat. |
+| `whatsapp_approve_draft` | `draftId` (`editedText?`) | Approve and dispatch a pending copilot draft. |
+| `whatsapp_manage_memory` | `chatId`, `action` (`content?`, `index?`) | Inspect, save, or delete long-term contact preferences with credential filtering. |
+| `whatsapp_set_chat_style` | `chatId`, `style` | Set tone: `professional`, `casual`, `playful`, `assertive`, or `empathetic`. |
+| `whatsapp_funnel_scatter_gather` (embedded only) | `method` (`payload?`, `queryParams?`) | Concurrent scatter-gather dispatch across external systems with circuit breaking. |
 
 ## Command-line interface
 
 ```bash
-# Verify environment, storage paths, and gcloud ADC credentials
+# Install preflight plus live readiness (model credentials, WhatsApp session or Meta config).
+# Exits 1 when any check fails. `--preflight` checks only the install; `--strict` also fails on warnings.
 bun run cli doctor
 
 # Simulate inbound message processing and print reasoning traces
@@ -216,9 +224,6 @@ cd ui && bun run build
 
 # Run vulnerability scan across all package lockfiles
 bun run security:audit
-
-# Run design and anti-slop governance audit
-bun .agents/skills/unslop-preflight/bin/cli.js audit
 ```
 
 ## Migration and enterprise storage
