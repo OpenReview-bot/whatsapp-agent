@@ -47,4 +47,52 @@ describe('privacy-safe logging', () => {
     }
     expect(offending).toEqual([]);
   });
+
+  it('source guard: inbound-path console calls never pass a raw error or its message', () => {
+    const files = ['src/index.ts', 'src/agent/reflection-worker.ts'];
+    const offending: string[] = [];
+    for (const f of files) {
+      readFileSync(join(import.meta.dir, '..', f), 'utf8').split('\n').forEach((line, i) => {
+        if (/console\.(log|warn|error|info)\(/.test(line) &&
+            /(,\s*(err|error|e)\s*\)|\b(err|error|e)\.message\b|\binstanceof Error \? \w+\.message)/.test(line) &&
+            !/describeError/.test(line)) {
+          offending.push(`${f}:${i + 1}`);
+        }
+      });
+    }
+    expect(offending).toEqual([]);
+  });
+
+  it('logEvent drops aliased content keys and cannot be made to override level or event', () => {
+    const lines: string[] = [];
+    logEvent('error', 'real_event', {
+      content: SECRET, messageText: SECRET, chat_id: CHAT, fusedText: SECRET, 'Sender-Name': SECRET,
+      level: 'info', event: 'forged', chat: hashChatId(CHAT, 's1'), code: 7
+    }, (l) => lines.push(l));
+    const out = JSON.parse(lines[0]);
+    expect(out.level).toBe('error');
+    expect(out.event).toBe('real_event');
+    expect(lines[0]).not.toContain(SECRET);
+    expect(lines[0]).not.toContain(CHAT);
+    expect(out.code).toBe(7);
+  });
+
+  it('describeError keeps a safe name and code but never content in a custom name', () => {
+    const named = new Error('x'); named.name = SECRET;
+    expect(describeError(named)).toBe('Error');
+    const coded = Object.assign(new Error('boom'), { code: 'ECONNRESET' });
+    expect(describeError(coded)).toBe('Error:ECONNRESET');
+  });
+
+  it('a short configured salt is ignored so hashes cannot be enumerated with a guessable salt', () => {
+    const before = process.env.LOG_HASH_SALT;
+    try {
+      process.env.LOG_HASH_SALT = 'abc';
+      expect(hashChatId(CHAT)).not.toBe(hashChatId(CHAT, 'abc'));
+      process.env.LOG_HASH_SALT = 'a-long-random-secret-value-1234';
+      expect(hashChatId(CHAT)).toBe(hashChatId(CHAT, 'a-long-random-secret-value-1234'));
+    } finally {
+      if (before === undefined) delete process.env.LOG_HASH_SALT; else process.env.LOG_HASH_SALT = before;
+    }
+  });
 });
