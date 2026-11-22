@@ -127,8 +127,13 @@ export function parseJevResponse(
   };
 }
 
+/** Maps Arabic-Indic (U+0660-0669) and Extended Arabic-Indic (U+06F0-06F9) digits to ASCII. */
+export function normalizeDigits(value: string): string {
+  return value.replace(/[\u0660-\u0669\u06F0-\u06F9]/g, (d) => String((d.codePointAt(0)! & 0xF) ));
+}
+
 function scrubRoutingState(message: string): string {
-  return scrubCredentials(message)
+  return normalizeDigits(scrubCredentials(message))
     .replace(/\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
     .replace(/https?:\/\/\S+/gi, '[REDACTED_URL]')
     .replace(/(?<!\w)\+?\d[\d\s().\-]{7,}\d(?!\w)/g, '[REDACTED_PHONE]')
