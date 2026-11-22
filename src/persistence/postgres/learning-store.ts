@@ -166,7 +166,7 @@ export class PostgresLearningStore implements LearningPersistenceStore {
   /**
    * Retrieves unreflected moderation feedback events
    */
-  async getUnreflectedFeedback(chatId?: string): Promise<ModerationFeedbackEvent[]> {
+  async getUnreflectedFeedback(chatId?: string, brandId?: string): Promise<ModerationFeedbackEvent[]> {
     const sql = this.getSql();
     let rows: any[];
 
@@ -175,6 +175,7 @@ export class PostgresLearningStore implements LearningPersistenceStore {
         SELECT id, chat_id, draft_id, feedback_type, original_reply, revised_reply, human_note
         FROM wa_agent.learning_feedback_events
         WHERE chat_id = ${chatId} AND reflected = 0
+          AND (${brandId ?? null}::text IS NULL OR brand_id = ${brandId ?? null})
         ORDER BY created_at ASC;
       `;
     } else {
@@ -199,12 +200,13 @@ export class PostgresLearningStore implements LearningPersistenceStore {
   /**
    * Marks moderation feedback events as reflected
    */
-  async markFeedbackReflected(chatId: string): Promise<void> {
+  async markFeedbackReflected(chatId: string, brandId?: string): Promise<void> {
     const sql = this.getSql();
     await sql`
       UPDATE wa_agent.learning_feedback_events
       SET reflected = 1
-      WHERE chat_id = ${chatId} AND reflected = 0;
+      WHERE chat_id = ${chatId} AND reflected = 0
+        AND (${brandId ?? null}::text IS NULL OR brand_id = ${brandId ?? null});
     `;
   }
 
@@ -236,7 +238,8 @@ export class PostgresLearningStore implements LearningPersistenceStore {
         AND last_activity_at <= ${cutoff}
         AND (last_activity_at > last_reflected_at OR EXISTS (
           SELECT 1 FROM wa_agent.learning_feedback_events fb
-          WHERE fb.chat_id = wa_agent.thread_learning_status.chat_id AND fb.reflected = 0
+          WHERE fb.brand_id = wa_agent.thread_learning_status.brand_id
+            AND fb.chat_id = wa_agent.thread_learning_status.chat_id AND fb.reflected = 0
         ))
       ORDER BY last_activity_at ASC
       LIMIT ${limit};
