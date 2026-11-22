@@ -1,3 +1,4 @@
+import { describeError, hashChatId, logEvent } from '../observability/safe-log';
 export interface RateLimiterOptions {
   minDelayMs?: number;
   maxDelayMs?: number;
@@ -83,7 +84,7 @@ export class HumanRateLimiter {
 
     const next = previous
       .catch((err) => {
-        console.warn(`[HumanRateLimiter] Prior queued action failed for chat ${chatId}:`, err);
+        logEvent('warn', 'rate_limiter_prior_action_failed', { chat: hashChatId(chatId), error: describeError(err) });
       })
       .then(async () => {
         try {

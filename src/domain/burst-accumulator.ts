@@ -1,4 +1,5 @@
 import type { ChatMessage, QuotedMessageInfo } from './types';
+import { describeError, hashChatId, logEvent } from '../observability/safe-log';
 
 export interface FusedBurst {
   chatId: string;
@@ -118,7 +119,7 @@ export class BurstAccumulator {
     try {
       await this.onBurstCallback(burst);
     } catch (err: any) {
-      console.error(`❌ [BurstAccumulator] Error in burst callback for ${chatId}:`, err.message);
+      logEvent('error', 'burst_callback_error', { chat: hashChatId(chatId), error: describeError(err) });
     }
 
     return burst;

@@ -30,6 +30,7 @@ import { ReflectionWorker } from './agent/reflection-worker';
 import { PostgresLearningStore } from './persistence/postgres/learning-store';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
 import { join } from 'node:path';
+import { describeBurst, describeError, hashChatId, logEvent } from './observability/safe-log';
 
 export async function createFableWhatsAppAgent(options: {
   port?: number;
@@ -157,7 +158,7 @@ export async function createFableWhatsAppAgent(options: {
         quotedMessage: burst.quotedMessage
       };
 
-      console.log(`💬 [Burst Fused] From: ${fusedMsg.senderName || fusedMsg.sender} | Messages: ${fusedMsg.text.replace(/\n/g, ' ↵ ')}`);
+      logEvent('info', 'burst_fused', describeBurst(fusedMsg));
 
       reflectionWorker.recordActivity(fusedMsg.chatId, fusedMsg.timestamp);
 
@@ -172,7 +173,7 @@ export async function createFableWhatsAppAgent(options: {
         });
 
         if (result.draftCreated) {
-          console.log(`📝 [Draft Created] Approval needed for chat ${fusedMsg.chatId}`);
+          logEvent('info', 'draft_created', { chat: hashChatId(fusedMsg.chatId) });
           sse.broadcast('new_draft', result.draftCreated);
         }
 
@@ -241,7 +242,7 @@ export async function createFableWhatsAppAgent(options: {
           });
         }
       } catch (err: any) {
-        console.error('❌ [Agent Processing Error]:', err.message);
+        logEvent('error', 'agent_processing_error', { error: describeError(err) });
       }
     }
   });
