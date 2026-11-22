@@ -433,6 +433,9 @@ export class SendLedger {
     return this.atomic(() => {
       const intent = this.getIntent(id);
       if (!intent || intent.state !== 'uncertain') return undefined;
+      // Never record acceptance before the interruption it follows, even if the clock moved backwards.
+      const interrupted = this.db.prepare('SELECT finished_at FROM send_attempts WHERE id=? AND intent_id=?').get(attemptId, id) as { finished_at?: number } | undefined;
+      now = Math.max(now, Number(interrupted?.finished_at ?? 0), intent.updatedAt);
       const changed = this.db.prepare(`
         UPDATE send_attempts SET outcome='accepted', failure_code='late_transport_acceptance', finished_at=?
         WHERE id=? AND intent_id=? AND outcome='uncertain' AND failure_code='process_interrupted'
@@ -442,6 +445,15 @@ export class SendLedger {
         UPDATE send_intents SET state='accepted', native_message_id=?, updated_at=? WHERE id=? AND state='uncertain'
       `).run(nativeMessageId, now, id);
       this.event(id, 'uncertain', 'accepted', 'late_transport_acceptance', now);
+      // The message exists, so a retry child that has not started must not send a second copy.
+      const child = this.db.prepare('SELECT id, state FROM send_intents WHERE parent_intent_id=? LIMIT 1').get(id) as { id: string; state: SendIntentState } | undefined;
+      if (child?.state === 'queued') {
+        this.db.prepare(`UPDATE send_intents SET state='failed', updated_at=? WHERE id=? AND state='queued'`).run(now, child.id);
+        this.event(child.id, 'queued', 'failed', 'superseded_by_late_acceptance', now);
+      } else if (child) {
+        // The retry already started or finished: a duplicate may have reached the customer. Make that visible.
+        this.event(id, 'accepted', 'accepted', 'late_acceptance_after_retry_started', now);
+      }
       return this.getIntent(id);
     });
   }

@@ -129,6 +129,10 @@ describe('delivery lifecycle across restarts', () => {
     expect(restarted.receipt(CHAT, 'wamid-2', 'read')?.state).toBe('read');
     expect(restarted.receipt(CHAT, 'wamid-2', 'delivered')).toBeUndefined();
     expect(restarted.receipt(CHAT, 'wamid-2', 'sent')).toBeUndefined();
+    // Re-read from a fresh connection: the stored state must still be `read`, not merely unreturned.
+    const created = store(path).getSendLedger();
+    expect(created.advanceReceipt(CHAT, 'wamid-2', 'read')).toBeUndefined();
+    expect(created.getDiagnosticsSummary().states.read).toBe(1);
   });
 
   it('explicit retry of an uncertain send after a restart creates exactly one child and is idempotent per mutation ID', async () => {
@@ -188,5 +192,28 @@ describe('delivery lifecycle across restarts', () => {
     // Second acceptance for the same attempt cannot overwrite.
     expect(ledger.accepted(created.id, claimed.attempt.id, 'native-other')).toBeUndefined();
     expect(ledger.getIntent(created.id)?.nativeMessageId).toBe('native-ok');
+  });
+
+  it('late acceptance cancels a queued retry child so the customer gets one copy', () => {
+    const s = store(dbPath());
+    const ledger = s.getSendLedger();
+    const created = ledger.createIntent(input({ sourceId: 'm-6' }));
+    const claimed = ledger.claim(created.id, 'w', Date.now(), 1)!;
+    ledger.recoverInterrupted(Date.now() + 10);
+    const child = ledger.createRetryIntent({ ...input({ sourceId: 'm-6-retry' }), parentIntentId: created.id });
+    expect(ledger.accepted(created.id, claimed.attempt.id, 'native-late')?.state).toBe('accepted');
+    expect(ledger.getIntent(child.id)?.state).toBe('failed');
+    expect(ledger.getEvents(child.id).map((e) => e.reason)).toContain('superseded_by_late_acceptance');
+    expect(ledger.claim(child.id, 'w2')).toBeUndefined();
+  });
+
+  it('late acceptance never timestamps before the interruption, even if the clock went backwards', () => {
+    const s = store(dbPath());
+    const ledger = s.getSendLedger();
+    const created = ledger.createIntent(input({ sourceId: 'm-7' }));
+    const claimed = ledger.claim(created.id, 'w', 1_000, 1)!;
+    ledger.recoverInterrupted(5_000);
+    const accepted = ledger.accepted(created.id, claimed.attempt.id, 'native-t', 2_000)!;
+    expect(accepted.updatedAt).toBeGreaterThanOrEqual(5_000);
   });
 });
