@@ -71,7 +71,7 @@ Set environment variables in `.env`. See [`.env.example`](.env.example) for defa
 |---|---|---|---|
 | `PORT` | number | `3000` | HTTP port for REST API and web UI |
 | `HOST` | string | `127.0.0.1` | Network interface to bind |
-| `DATA_DIR` | string | `./data` | Directory for SQLite database and local state |
+| `DATA_DIR` | string | `./data` | Listed for reference only: the current runtime always uses `./data` and does not read this variable |
 | `GEMINI_API_KEY` | string | | Google Gemini Developer API key (optional if using `gcloud` ADC) |
 | `GOOGLE_CLOUD_PROJECT` | string | | Google Cloud project ID for Vertex AI |
 | `GOOGLE_CLOUD_LOCATION` | string | `us-central1` | Regional location for Vertex AI endpoints |
@@ -111,7 +111,9 @@ To use WhatsApp Agent tools inside Claude Desktop, Cursor, or Gemini CLI, regist
 }
 ```
 
-The runner starts its own managed WhatsApp socket from the saved session (`DATA_DIR/session`) and waits up to `MCP_CONNECT_TIMEOUT_MS` (default 20000) for it to connect. If it does not connect, tools still start and `whatsapp_get_status` reports the real state. WhatsApp allows one live socket per session, so do not run the MCP runner while the main app (`bun run start`) uses the same `DATA_DIR`. Set `MCP_WHATSAPP_CHANNEL=none` to run the read and memory tools without opening a socket. Diagnostics go to stderr; stdout carries only the MCP protocol.
+The runner starts its own managed WhatsApp socket from the saved session (`./data/session`) and waits up to `MCP_CONNECT_TIMEOUT_MS` (default 20000) for it to connect. If it does not connect, tools still start and `whatsapp_get_status` reports the real state. WhatsApp allows one live socket per session, so do not run the MCP runner while the main app (`bun run start`) uses the same `./data` directory. Set `MCP_WHATSAPP_CHANNEL=none` for a read-only runner with no socket: only the list, read, search, fold and status tools are offered, and reading messages does not mark chats read.
+
+Limits of the standalone runner: it does not ingest new inbound messages or delivery receipts while running (the main app does that), so message reads show history up to the last main-app run, and send statuses are not updated by receipts. Closing the stdio session stops the socket, but a send in flight when the process is killed can be left `uncertain` in the ledger. Diagnostics go to stderr; stdout carries only the MCP protocol.
 
 ### Available MCP tools
 
@@ -124,7 +126,7 @@ The standalone runner registers these 12 tools. `whatsapp_funnel_scatter_gather`
 | `whatsapp_search_chat_memory` | `chatId`, `query` | Search one chat in raw messages and summarized historical folds. |
 | `whatsapp_get_chat_folds` | `chatId` | List historical session and milestone fold summaries for one chat. |
 | `whatsapp_decompress_fold` | `chatId`, `foldId` | Inspect the raw messages behind a fold, optionally around one referenced message. |
-| `whatsapp_send_message` | `chatId`, `text` (`replyToMessageId?`) | Send a message through the durable send ledger with simulated typing cadence. |
+| `whatsapp_send_message` | `chatId`, `text` (`replyToMessageId?`, `mutationId?`) | Send a message through the durable send ledger with simulated typing cadence. Reuse the same `mutationId` when retrying so a retry cannot create a second send. |
 | `whatsapp_send_reaction` | `chatId`, `messageId`, `emoji` | Send an emoji reaction to a message. |
 | `whatsapp_get_status` | none | Inspect socket connection status, phone number, and pending drafts. |
 | `whatsapp_set_chat_mode` | `chatId`, `mode` (`autopilot`, `copilot`, `human`) | Set agent operation mode for a chat. |
