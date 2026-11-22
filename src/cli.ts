@@ -15,7 +15,7 @@ async function doctor() {
   // Check gcloud
   try {
     const project = (await Bun.$`gcloud config get-value project`.text()).trim();
-    const token = (await Bun.$`gcloud auth print-access-token`.text()).trim();
+    await Bun.$`gcloud auth print-access-token`.quiet();
     console.log(`✓ Google Cloud CLI: Authenticated`);
     console.log(`  Active Project: ${project}`);
     console.log(`  Access Credential: Valid (active)`);

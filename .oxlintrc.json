@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error" },
+  "rules": {
+    "no-useless-escape": "off",
+    "no-misleading-character-class": "off",
+    "no-control-regex": "off"
+  },
+  "ignorePatterns": ["ui/dist/**", "node_modules/**", "data/**", "replica/**", "reports/**", "whale/**", "toolchains/**"]
+}

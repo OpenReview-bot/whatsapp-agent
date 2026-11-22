@@ -27,13 +27,13 @@ test('write timeout is uncertain after restart and never repeats without reconci
     const first = new ActionJournal({dbPath});
     const registry = new ToolRegistry(first);
     let writes=0;
-    registry.register('a',{name:'booking.create',kind:'write',scope:'booking:write',validate:(_):_ is object=>true,execute:async()=>{writes++;throw new Error('network timeout')}});
+    registry.register('a',{name:'booking.create',kind:'write',scope:'booking:write',validate:(_input:unknown):_input is object=>true,execute:async()=>{writes++;throw new Error('network timeout')}});
     const args={brandId:'a',toolName:'booking.create',workflowId:'w',idempotencyKey:'same',input:{slot:'10:00'}};
     expect((await registry.run(args)).status).toBe('uncertain');
     first.close();
     const second=new ActionJournal({dbPath});
     const next=new ToolRegistry(second);
-    next.register('a',{name:'booking.create',kind:'write',scope:'booking:write',validate:(_):_ is object=>true,execute:async()=>{writes++;return {confirmed:true}}});
+    next.register('a',{name:'booking.create',kind:'write',scope:'booking:write',validate:(_input:unknown):_input is object=>true,execute:async()=>{writes++;return {confirmed:true}}});
     expect((await next.run(args)).status).toBe('uncertain');
     expect(writes).toBe(1);
     second.close();
@@ -43,7 +43,7 @@ test('write timeout is uncertain after restart and never repeats without reconci
 test('registry never exposes unauthorized tools or tools from another tenant', async () => {
  const journal=new ActionJournal({dbPath:':memory:'});
  const registry=new ToolRegistry(journal);
- registry.register('a',{name:'refund',kind:'write',scope:'refund:write',validate:(_):_ is object=>true,execute:async()=>({})});
+ registry.register('a',{name:'refund',kind:'write',scope:'refund:write',validate:(_input:unknown):_input is object=>true,execute:async()=>({})});
  expect(registry.list('b')).toHaveLength(0);
  await expect(registry.run({brandId:'b',toolName:'refund',workflowId:'w',idempotencyKey:'k',input:{}})).rejects.toThrow();
  journal.close();

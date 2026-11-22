@@ -44,7 +44,7 @@ describe('VoiceSynthesizer', () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]?.headers.get('Authorization')).toBe('Bearer local-test-token');
     expect(requests[1]?.headers.get('X-Goog-User-Project')).toBe('local-test-project');
-    expect((requests[1]?.body as { voice: { languageCode: string } }).voice.languageCode).toBe('ar-XA');
+    expect((requests[1]!.body as { voice: { languageCode: string } }).voice.languageCode).toBe('ar-XA');
   });
 
   it('reports failure when both providers reject instead of silently passing without synthesized audio', async () => {

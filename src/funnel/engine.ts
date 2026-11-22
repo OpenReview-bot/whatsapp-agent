@@ -245,8 +245,8 @@ export class FableFunnelEngine {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'X-Funnel-Trace-Id': req.traceId || crypto.randomUUID(),
-          ...(target.headers || {}),
-          ...(req.headers || {})
+          ...target.headers,
+          ...req.headers
         };
 
         if (target.authHeader) {

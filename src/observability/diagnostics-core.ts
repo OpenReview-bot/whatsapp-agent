@@ -267,7 +267,7 @@ export class DiagnosticsCore {
     let oldestAgeMs = 0;
     let eventCount = 0;
 
-    for (const [traceId, trace] of this.traces) {
+    for (const trace of this.traces.values()) {
       eventCount += trace.events.length;
       const firstTimestamp = (stage: DiagnosticStage) => trace.firstSuccessfulStageAt[stage];
       const persistedAt = firstTimestamp("persisted");

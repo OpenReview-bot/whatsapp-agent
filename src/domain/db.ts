@@ -8,8 +8,7 @@ import type {
   AgentMode,
   ChatMessage,
   ChatSummary,
-  ContactDossier,
-  QuotedMessageInfo
+  ContactDossier
 } from './types';
 
 const STATUS_RANK: Record<NonNullable<ChatMessage['status']>, number> = {

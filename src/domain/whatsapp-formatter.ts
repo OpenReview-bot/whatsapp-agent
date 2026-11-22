@@ -80,7 +80,7 @@ function convertMarkdownTables(text: string): string {
 
         for (let r = startRow; r < tableLines.length; r++) {
           const cells = parseCells(tableLines[r]);
-          if (cells.length > 0 && cells.some((c) => c.length > 0)) {
+          if (cells.some((c) => c.length > 0)) {
             const rowParts: string[] = [];
             for (let c = 0; c < cells.length; c++) {
               const header = headerRow[c] || `Col ${c + 1}`;
