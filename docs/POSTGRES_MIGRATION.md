@@ -76,3 +76,13 @@ Optional live integration tests require a dedicated disposable `TEST_DATABASE_UR
 ## Rollback
 
 If the importer fails, PostgreSQL data inserts roll back and SQLite is unchanged. If the importer succeeds, keep SQLite frozen until the PostgreSQL runtime is validated. Reverting the app to SQLite after PostgreSQL has accepted new messages will lose those newer messages unless a separately verified reverse-export procedure is available.
+
+## Verified limits (audit #46, Phase 2)
+
+Checked by `tests/postgres-pglite.test.ts` on a real PostgreSQL engine (PGlite, in-process). This proves the SQL, not the network driver, pooling, roles, RLS or Supabase.
+
+- `001_initial.sql` applies, is idempotent, and the migrator refuses a database whose schema is newer than the app.
+- **Known gap:** `migratePostgres` applies only `001_initial.sql` and records version 1. `002_learning_memory.sql` (learning states, reflections, feedback, thread status) is never applied by `bun run db:postgres --schema`. `PostgresLearningStore` works once 002 is applied by hand (tested), but nothing in the tool does that. Apply 002 manually before using the learning store, or extend the migrator with a version-2 step.
+- The learning store round-trips on the 002 schema, including Arabic text and version increments.
+- `DATASTORE=postgres` still fails closed on purpose. The delivery ledger, chat, follow-ups and knowledge writers remain SQLite-only, so there is no supported cutover yet.
+- Not proven: a live Supabase/Postgres connection through Bun.SQL, concurrent writers, and the SQLite-to-Postgres import against production-size data.
