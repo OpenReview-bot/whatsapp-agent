@@ -664,7 +664,7 @@ export function createApiServer(deps: {
     // Unauthenticated route: never expose per-target credentials.
     const methods = funnelEngine.registry.listMethods().map((m) => ({
       ...m,
-      targets: m.targets.map(({ authHeader, headers, ...safe }) => ({
+      targets: (m.targets ?? []).map(({ authHeader, headers, ...safe }) => ({
         ...safe,
         hasAuthHeader: Boolean(authHeader),
         headerNames: Object.keys(headers ?? {})

@@ -62,3 +62,20 @@ test('GET /api/funnel/methods does not leak target credentials', async () => {
   expect(text).not.toContain('SECRET-HDR');
   expect(JSON.parse(text).methods[0].targets[0].hasAuthHeader).toBe(true);
 });
+
+test('GET /api/funnel/methods tolerates a method registered without targets', async () => {
+  const {FableFunnelEngine} = await import('../src/funnel/engine');
+  const {FunnelRegistry} = await import('../src/funnel/registry');
+  const registry = new FunnelRegistry();
+  registry.registerMethod({method: 'bare'} as any);
+  const app = createApiServer({
+    memoryStore: {getPendingDrafts: () => []} as any,
+    whatsappClient: {getState: () => ({state: 'disconnected'})} as any,
+    moderatorAgent: {} as any,
+    sse: {broadcast: () => {}} as any,
+    funnelEngine: new FableFunnelEngine({registry})
+  });
+  const res = await app.request('/api/funnel/methods');
+  expect(res.status).toBe(200);
+  expect(JSON.parse(await res.text()).methods[0].targets).toEqual([]);
+});
