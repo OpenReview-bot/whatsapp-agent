@@ -2,7 +2,7 @@ import { GeminiClient } from './ai/gemini-client';
 import { ModeratorAgent } from './ai/moderator-agent';
 import { MemoryStore } from './domain/memory-store';
 import { WhatsAppSocketClient } from './transport/whatsapp-socket';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { formatDoctorReport, runDoctor } from './doctor';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
@@ -14,17 +14,32 @@ const [command, ...args] = process.argv.slice(2);
 async function doctor(flags: string[]) {
   console.log('🔍 [Fable Agentic WhatsApp Doctor] Diagnosing environment...\n');
   const preflightOnly = flags.includes('--preflight');
-  const dataDir = process.env.DATA_DIR ?? './data';
+  // The app, `pair` and MCP all use ./data (DATA_DIR is not read anywhere), so probe the same place.
+  const dataDir = './data';
   const report = await runDoctor({
     bunVersion: Bun.version,
     env: process.env,
     openStorage: () => new MemoryStore().listChats().length,
     uiBuilt: () => existsSync('./ui/dist/index.html'),
     gcloudAuthenticated: async () => {
-      await Bun.$`gcloud auth print-access-token`.quiet();
+      // Same path GeminiClient uses: active gcloud account token plus a project. Bounded so a stuck helper cannot hang the doctor.
+      const run = (args: string[]) => {
+        const proc = Bun.spawn(['gcloud', ...args], { stdout: 'pipe', stderr: 'pipe', timeout: 15_000, killSignal: 'SIGKILL' });
+        return Promise.all([new Response(proc.stdout as unknown as BodyInit).text(), proc.exited]);
+      };
+      const [token, tokenExit] = await run(['auth', 'print-access-token']);
+      if (tokenExit !== 0 || token.trim().length < 20) throw new Error('gcloud could not print an access token (or timed out)');
+      if (process.env.GOOGLE_CLOUD_PROJECT) return true;
+      const [project] = await run(['config', 'get-value', 'project']);
+      if (!project.trim()) throw new Error('no Google Cloud project is set');
       return true;
     },
-    sessionPaired: () => existsSync(join(dataDir, 'session', 'creds.json'))
+    sessionPaired: () => {
+      try {
+        const creds = JSON.parse(readFileSync(join(dataDir, 'session', 'creds.json'), 'utf8'));
+        return creds?.registered === true;
+      } catch { return false; }
+    }
   }, { preflightOnly, strict: flags.includes('--strict') });
   console.log(formatDoctorReport(report, { preflightOnly }));
   process.exitCode = report.exitCode;

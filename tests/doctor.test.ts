@@ -58,8 +58,41 @@ describe('doctor', () => {
     const r = await runDoctor(base({ env: { GEMINI_API_KEY: 'k', WHATSAPP_TRANSPORT: 'meta-cloud', META_CLOUD_PHONE_NUMBER_ID: 'p' } }));
     expect(r.exitCode).toBe(1);
     const detail = r.checks.find((c) => c.id === 'transport')?.detail ?? '';
-    expect(detail).toContain('META_CLOUD_ACCESS_TOKEN');
+    for (const name of ['META_CLOUD_GRAPH_VERSION', 'META_CLOUD_BUSINESS_ACCOUNT_ID', 'META_CLOUD_ACCESS_TOKEN',
+      'META_CLOUD_APP_SECRET', 'META_CLOUD_VERIFY_TOKEN', 'AGENT_AUTOPILOT_BRAND_ID']) {
+      expect(detail).toContain(name);
+    }
     expect(detail).not.toContain('META_CLOUD_PHONE_NUMBER_ID');
+  });
+
+  it('meta-cloud needs AGENT_AUTOPILOT_BRAND_ID because startup throws without it', async () => {
+    const env = { GEMINI_API_KEY: 'k', WHATSAPP_TRANSPORT: 'meta-cloud', META_CLOUD_GRAPH_VERSION: 'v1', META_CLOUD_PHONE_NUMBER_ID: 'p',
+      META_CLOUD_BUSINESS_ACCOUNT_ID: 'b', META_CLOUD_ACCESS_TOKEN: 't', META_CLOUD_APP_SECRET: 's', META_CLOUD_VERIFY_TOKEN: 'v' };
+    expect((await runDoctor(base({ env }))).exitCode).toBe(1);
+    expect((await runDoctor(base({ env: { ...env, AGENT_AUTOPILOT_BRAND_ID: 'brand' } }))).exitCode).toBe(0);
+  });
+
+  it('an empty HOST is loopback, like server startup', async () => {
+    const r = await runDoctor(base({ env: { GEMINI_API_KEY: 'k', HOST: '' } }));
+    expect(r.checks.find((c) => c.id === 'dashboard-auth')).toBeUndefined();
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('--strict with only a warning is not ready and never prints a ready message', async () => {
+    const r = await runDoctor(base({ uiBuilt: () => false }), { strict: true });
+    expect(r.exitCode).toBe(1);
+    expect(r.liveReady).toBe(false);
+    const out = formatDoctorReport(r);
+    expect(out).toContain('NOT READY');
+    expect(out).not.toContain('Ready to start');
+  });
+
+  it('shows why gcloud failed and strips terminal control characters from environment text', async () => {
+    const r = await runDoctor(base({ env: { WHATSAPP_TRANSPORT: 'x\u001b[2Jy\nFAKE OK' }, gcloudAuthenticated: async () => { throw new Error('no project\u001b[31m'); } }));
+    const out = formatDoctorReport(r);
+    expect(out).toContain('no project');
+    expect(out).not.toContain('\u001b');
+    expect(r.checks.find((c) => c.id === 'transport')?.label).not.toContain('\n');
   });
 
   it('rejects an unknown transport and an exposed host without a strong token', async () => {
