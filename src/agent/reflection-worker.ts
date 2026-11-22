@@ -2,6 +2,7 @@ import type { MemoryStore } from '../domain/memory-store';
 import type { DualMemoryManager, LearningPersistenceStore } from '../domain/learning-memory';
 import type { ReflectionEngine, ModerationFeedbackEvent, ReflectionResult } from '../ai/reflection-engine';
 import type { PostgresLearningStore } from '../persistence/postgres/learning-store';
+import { describeError, hashChatId, logEvent } from '../observability/safe-log';
 
 export interface ReflectionWorkerOptions {
   memoryStore: MemoryStore;
@@ -227,7 +228,7 @@ export class ReflectionWorker {
 
       return result;
     } catch (err: any) {
-      console.warn(`⚠️ [ReflectionWorker] Failed reflection for ${chatId} (${reason}):`, err.message);
+      logEvent('warn', 'reflection_failed', { chat: hashChatId(chatId), reason: String(reason), error: describeError(err) });
       return null;
     } finally {
       record.isProcessing = false;
