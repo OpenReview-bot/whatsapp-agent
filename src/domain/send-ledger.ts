@@ -419,7 +419,31 @@ export class SendLedger {
 
   accepted(id: string, attemptId: string, nativeMessageId: string, now = Date.now()): SendIntent | undefined {
     if (!nativeMessageId.trim()) throw new Error('Native message ID required');
-    return this.transitionAttempt(id, attemptId, 'accepted', 'accepted', 'transport_accepted', now, nativeMessageId);
+    return this.transitionAttempt(id, attemptId, 'accepted', 'accepted', 'transport_accepted', now, nativeMessageId)
+      ?? this.lateAcceptance(id, attemptId, nativeMessageId, now);
+  }
+
+  /**
+   * A sweeper can mark a slow in-flight attempt `uncertain` (lease expired) before the transport
+   * answers. If that same attempt then returns a native ID, the send is no longer uncertain:
+   * record the ID so receipts correlate and nobody retries a message that was delivered.
+   * Only the interrupted attempt itself qualifies, and only while the intent is still uncertain.
+   */
+  private lateAcceptance(id: string, attemptId: string, nativeMessageId: string, now: number): SendIntent | undefined {
+    return this.atomic(() => {
+      const intent = this.getIntent(id);
+      if (!intent || intent.state !== 'uncertain') return undefined;
+      const changed = this.db.prepare(`
+        UPDATE send_attempts SET outcome='accepted', failure_code='late_transport_acceptance', finished_at=?
+        WHERE id=? AND intent_id=? AND outcome='uncertain' AND failure_code='process_interrupted'
+      `).run(now, attemptId, id);
+      if (changed.changes !== 1) return undefined;
+      this.db.prepare(`
+        UPDATE send_intents SET state='accepted', native_message_id=?, updated_at=? WHERE id=? AND state='uncertain'
+      `).run(nativeMessageId, now, id);
+      this.event(id, 'uncertain', 'accepted', 'late_transport_acceptance', now);
+      return this.getIntent(id);
+    });
   }
 
   uncertain(id: string, attemptId: string, reason = 'ambiguous_failure', now = Date.now()): SendIntent | undefined {
