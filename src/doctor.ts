@@ -14,7 +14,7 @@ export interface DoctorProbes {
   openStorage: () => number;
   /** True when the web cockpit build exists. */
   uiBuilt: () => boolean;
-  /** Resolves true when gcloud application-default credentials work. */
+  /** Resolves true when the active gcloud account can mint a token and a project is set. Rejects with the cause otherwise. */
   gcloudAuthenticated: () => Promise<boolean>;
   /** True when a paired Baileys session is saved. */
   sessionPaired: () => boolean;
@@ -32,8 +32,16 @@ export interface DoctorReport {
 const MIN_BUN: [number, number] = [1, 3];
 const META_VARS = [
   'META_CLOUD_GRAPH_VERSION', 'META_CLOUD_PHONE_NUMBER_ID', 'META_CLOUD_BUSINESS_ACCOUNT_ID',
-  'META_CLOUD_ACCESS_TOKEN', 'META_CLOUD_APP_SECRET', 'META_CLOUD_VERIFY_TOKEN'
+  'META_CLOUD_ACCESS_TOKEN', 'META_CLOUD_APP_SECRET', 'META_CLOUD_VERIFY_TOKEN',
+  // createFableWhatsAppAgent throws at startup in meta-cloud mode without it.
+  'AGENT_AUTOPILOT_BRAND_ID'
 ];
+
+/** Environment text is printed to an operator terminal: drop control characters and cap length. */
+function printable(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').slice(0, 64);
+}
 
 function bunAtLeast(version: string): boolean {
   const [major, minor] = version.split('.').map((n) => Number.parseInt(n, 10));
@@ -66,10 +74,16 @@ export async function runDoctor(probes: DoctorProbes, options: { preflightOnly?:
 
   if (!options.preflightOnly) {
     const hasKey = Boolean(probes.env.GEMINI_API_KEY);
-    const adc = hasKey ? false : await probes.gcloudAuthenticated().catch(() => false);
-    add(hasKey || adc
-      ? { id: 'model-auth', section: 'live', level: 'pass', label: hasKey ? 'Gemini API key configured' : 'Google Cloud ADC authenticated' }
-      : { id: 'model-auth', section: 'live', level: 'fail', label: 'No model credentials', detail: 'Set GEMINI_API_KEY or run `gcloud auth application-default login`.' });
+    let gcloudOk = false;
+    let gcloudError = '';
+    if (!hasKey) {
+      try { gcloudOk = await probes.gcloudAuthenticated(); } catch (err) {
+        gcloudError = printable(err instanceof Error ? err.message : String(err));
+      }
+    }
+    add(hasKey || gcloudOk
+      ? { id: 'model-auth', section: 'live', level: 'pass', label: hasKey ? 'Gemini API key configured' : 'gcloud account and project available' }
+      : { id: 'model-auth', section: 'live', level: 'fail', label: 'No model credentials', detail: `Set GEMINI_API_KEY, or run \`gcloud auth login\` and \`gcloud config set project <id>\` (the app uses the active gcloud account and project).${gcloudError ? ` gcloud said: ${gcloudError}` : ''}` });
 
     const transport = probes.env.WHATSAPP_TRANSPORT ?? 'baileys';
     if (transport === 'meta-cloud') {
@@ -82,22 +96,22 @@ export async function runDoctor(probes: DoctorProbes, options: { preflightOnly?:
         ? { id: 'transport', section: 'live', level: 'pass', label: 'Baileys session saved (connection not tested)' }
         : { id: 'transport', section: 'live', level: 'fail', label: 'No paired WhatsApp session', detail: 'Run `bun run cli pair`.' });
     } else {
-      add({ id: 'transport', section: 'live', level: 'fail', label: `Unknown WHATSAPP_TRANSPORT "${transport}"`, detail: 'Use baileys or meta-cloud.' });
+      add({ id: 'transport', section: 'live', level: 'fail', label: `Unknown WHATSAPP_TRANSPORT "${printable(transport)}"`, detail: 'Use baileys or meta-cloud.' });
     }
 
     const token = probes.env.AGENT_DASHBOARD_TOKEN ?? '';
-    const host = probes.env.HOST ?? '127.0.0.1';
+    const host = probes.env.HOST || '127.0.0.1'; // same fallback as server startup
     const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host.toLowerCase());
     if (!loopback && token.length < 24) {
-      add({ id: 'dashboard-auth', section: 'live', level: 'fail', label: 'Non-loopback HOST without a strong AGENT_DASHBOARD_TOKEN', detail: 'Use a token of at least 24 characters.' });
+      add({ id: 'dashboard-auth', section: 'live', level: 'fail', label: 'Non-loopback HOST without a strong AGENT_DASHBOARD_TOKEN', detail: 'Use a random token of at least 24 characters, for example `openssl rand -hex 32`.' });
     }
   }
 
   const failures = checks.filter((c) => c.level === 'fail').length;
   const warnings = checks.filter((c) => c.level === 'warn').length;
   const preflightOk = !checks.some((c) => c.section === 'preflight' && c.level === 'fail');
-  const liveReady = !options.preflightOnly && failures === 0;
   const exitCode = failures > 0 || (options.strict === true && warnings > 0) ? 1 : 0;
+  const liveReady = !options.preflightOnly && exitCode === 0;
   return { checks, failures, warnings, preflightOk, liveReady, exitCode };
 }
 
@@ -116,6 +130,8 @@ export function formatDoctorReport(report: DoctorReport, options: { preflightOnl
   lines.push('');
   if (report.failures > 0) {
     lines.push(`NOT READY: ${report.failures} check(s) failed${report.warnings ? `, ${report.warnings} warning(s)` : ''}.`);
+  } else if (report.exitCode !== 0) {
+    lines.push(`NOT READY (--strict): ${report.warnings} warning(s) treated as failures.`);
   } else if (options.preflightOnly) {
     lines.push('Preflight passed. Live readiness was not checked (run `doctor` without --preflight).');
   } else {
