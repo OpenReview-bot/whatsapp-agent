@@ -40,7 +40,8 @@ export async function createMcpRuntime<C extends ManagedChannelClient>(deps: Mcp
   const server = createWhatsAppMcpServer({
     memoryStore: deps.memoryStore,
     moderatorAgent: deps.moderatorAgent,
-    whatsappClient: client as unknown as WhatsAppSocketClient
+    whatsappClient: client as unknown as WhatsAppSocketClient,
+    readOnly: mode === 'none'
   });
   return { server, channel, shutdown: async () => { await channel?.stop(); } };
 }

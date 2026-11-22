@@ -44,7 +44,8 @@ describe('MCP runner composition', () => {
 
     const handler = (runtime.server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
     const res = await handler({ method: 'tools/call', params: { name: 'whatsapp_get_status', arguments: {} } }, {});
-    expect(JSON.stringify(res)).toContain('connected');
+    const status = JSON.parse(res.content[0].text);
+    expect(status.state ?? status.connectionState).toBe('connected');
     await runtime.shutdown();
     expect(f.client.calls.disconnect).toBe(1);
   });
@@ -73,5 +74,41 @@ describe('MCP runner composition', () => {
     const runtime = await createMcpRuntime({ ...deps('b'), createClient: f.bind, channelMode: 'none' });
     expect(f.client.calls.start).toBe(0);
     expect(runtime.channel).toBeNull();
+  });
+
+  it('start() that never settles cannot block runtime creation past the timeout', async () => {
+    const f = fakeClient();
+    f.client.start = async () => new Promise<void>(() => {});
+    const t0 = Date.now();
+    const runtime = await createMcpRuntime({ ...deps('stall'), createClient: f.bind, log: () => {}, connectTimeoutMs: 60 });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(runtime.channel?.connected).toBe(false);
+  });
+
+  it('a start that throws ends the wait immediately instead of waiting out the timeout', async () => {
+    const f = fakeClient({ failStart: true });
+    const t0 = Date.now();
+    const channel = await startManagedChannel({ createClient: f.bind, connectTimeoutMs: 5000, log: () => {} });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(channel.connected).toBe(false);
+  });
+
+  it('channel mode none is read-only: mutating tools are hidden and refused, reads do not mark chats read', async () => {
+    const f = fakeClient();
+    const d = deps('ro');
+    d.memoryStore.addMessage({ id: 'x1', chatId: 'c@s.whatsapp.net', sender: 'c@s.whatsapp.net', text: 'hi', timestamp: Date.now(), isFromMe: false, type: 'text' } as any);
+    const before = d.memoryStore.listChats().find((c) => c.id === 'c@s.whatsapp.net')?.unreadCount ?? 0;
+    const runtime = await createMcpRuntime({ ...d, createClient: f.bind, channelMode: 'none' });
+    const handlers = (runtime.server as any)._requestHandlers;
+    const list = await handlers.get('tools/list')({ method: 'tools/list' }, {});
+    const names = list.tools.map((t: any) => t.name);
+    expect(names).toContain('whatsapp_get_messages');
+    for (const bad of ['whatsapp_send_message', 'whatsapp_send_reaction', 'whatsapp_set_chat_mode', 'whatsapp_approve_draft', 'whatsapp_manage_memory']) {
+      expect(names).not.toContain(bad);
+      const res = await handlers.get('tools/call')({ method: 'tools/call', params: { name: bad, arguments: {} } }, {});
+      expect(res.isError).toBe(true);
+    }
+    await handlers.get('tools/call')({ method: 'tools/call', params: { name: 'whatsapp_get_messages', arguments: { chatId: 'c@s.whatsapp.net' } } }, {});
+    expect(d.memoryStore.listChats().find((c) => c.id === 'c@s.whatsapp.net')?.unreadCount ?? 0).toBe(before);
   });
 });

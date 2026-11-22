@@ -12,6 +12,12 @@ import type { FableFunnelEngine } from '../funnel';
 import { UserMemoryManager } from '../domain/user-memory';
 import type { ConversationStyle } from '../ai/adaptive-style';
 
+/** Tools with no persistent or outbound effect. `whatsapp_get_messages` skips its mark-as-read side effect in read-only mode. */
+const READ_ONLY_TOOLS = new Set([
+  'whatsapp_list_chats', 'whatsapp_get_messages', 'whatsapp_search_chat_memory',
+  'whatsapp_get_chat_folds', 'whatsapp_decompress_fold', 'whatsapp_get_status'
+]);
+
 export function createWhatsAppMcpServer(deps: {
   memoryStore: MemoryStore;
   whatsappClient: WhatsAppSocketClient;
@@ -19,6 +25,8 @@ export function createWhatsAppMcpServer(deps: {
   audioTranscriber?: AudioTranscriber;
   funnelEngine?: FableFunnelEngine;
   sendIntents?: SendIntentService;
+  /** Expose only tools that cannot change stored state or send anything. */
+  readOnly?: boolean;
 }): Server {
   let delivery = deps.sendIntents;
   const getDelivery = () => delivery ??= new SendIntentService({
@@ -39,7 +47,7 @@ export function createWhatsAppMcpServer(deps: {
 
   // List available tools
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
+    const all = {
       tools: [
         {
           name: 'whatsapp_list_chats',
@@ -280,11 +288,15 @@ export function createWhatsAppMcpServer(deps: {
         }] : [])
       ]
     };
+    return deps.readOnly ? { tools: all.tools.filter((t) => READ_ONLY_TOOLS.has(t.name)) } : all;
   });
 
   // Call tool handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    if (deps.readOnly && !READ_ONLY_TOOLS.has(name)) {
+      return { isError: true, content: [{ type: 'text', text: `Tool ${name} is unavailable in read-only mode (MCP_WHATSAPP_CHANNEL=none).` }] };
+    }
 
     switch (name) {
       case 'whatsapp_list_chats': {
@@ -306,7 +318,7 @@ export function createWhatsAppMcpServer(deps: {
         const chatId = String(args?.chatId);
         const limit = Number(args?.limit ?? 20);
         const messages = deps.memoryStore.getMessages(chatId, limit);
-        deps.memoryStore.markChatRead(chatId);
+        if (!deps.readOnly) deps.memoryStore.markChatRead(chatId);
         return {
           content: [
             {

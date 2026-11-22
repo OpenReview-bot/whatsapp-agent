@@ -1,7 +1,8 @@
 import type { PairingState } from '../domain/types';
 import type { WhatsAppSocketClient } from '../transport/whatsapp-socket';
 
-export type ManagedChannelClient = Pick<WhatsAppSocketClient, 'start' | 'getState' | 'disconnect'>;
+/** Everything the tool server calls on the client, so a lifecycle-only fake cannot be cast into it. */
+export type ManagedChannelClient = Pick<WhatsAppSocketClient, 'start' | 'getState' | 'disconnect' | 'sendMessage' | 'sendReaction'>;
 
 export interface ManagedChannelOptions<C extends ManagedChannelClient> {
   /** Builds the transport client. Receives a state listener the channel uses to detect readiness. */
@@ -42,17 +43,18 @@ export async function startManagedChannel<C extends ManagedChannelClient>(
     }
   });
 
-  try {
-    await client.start();
-  } catch (err) {
+  // start() can stall on auth loading or the Baileys version lookup, so it runs under the same bounded
+  // wait as the connection, and a start that fails ends the wait immediately instead of burning the timeout.
+  const startFailed = client.start().then(() => new Promise<never>(() => {})).catch((err: unknown) => {
     log(`[MCP channel] Failed to start WhatsApp transport: ${err instanceof Error ? err.message : String(err)}`);
-  }
+    return false as const;
+  });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), timeoutMs);
   });
-  const connected = client.getState().state === 'connected' || await Promise.race([connectedSignal, timeout]);
+  const connected = client.getState().state === 'connected' || await Promise.race([connectedSignal, startFailed, timeout]);
   if (timer) clearTimeout(timer);
 
   if (!connected) {
