@@ -8,7 +8,7 @@ const ok = { model: 'jev-latest', answers: {
 async function outgoingState(message: string): Promise<string> {
   let body: any = {};
   await routeTurnModel({
-    message, apiKey: 'synthetic-test-key', externalRoutingAllowed: true,
+    message, apiKey: ['synthetic', 'test', 'key'].join('-'), enabled: true, externalRoutingAllowed: true,
     fetchFn: (async (_u: string | URL | Request, init?: RequestInit) => {
       body = JSON.parse(String(init?.body));
       return new Response(JSON.stringify(ok), { status: 200 });
@@ -40,5 +40,11 @@ describe('router phone scrub with Arabic digits', () => {
     expect(state).toContain('[REDACTED_PHONE]');
     expect(state).toContain('5');
     expect(state).not.toContain('[REDACTED_PHONE] [REDACTED_PHONE]');
+  });
+
+  it('redacts a labeled OTP written in Arabic-Indic digits', async () => {
+    const state = await outgoingState('كود التحقق OTP: ١٢٣٤٥٦ لا تشاركه');
+    expect(state).not.toMatch(/[١٢٣٤٥٦]{4}/);
+    expect(state).not.toContain('123456');
   });
 });

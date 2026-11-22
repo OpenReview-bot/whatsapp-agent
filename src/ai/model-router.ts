@@ -133,7 +133,8 @@ export function normalizeDigits(value: string): string {
 }
 
 function scrubRoutingState(message: string): string {
-  return normalizeDigits(scrubCredentials(message))
+  // Normalize digits first so labeled OTPs written in Arabic-Indic digits match the ASCII credential patterns.
+  return scrubCredentials(normalizeDigits(message))
     .replace(/\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]')
     .replace(/https?:\/\/\S+/gi, '[REDACTED_URL]')
     .replace(/(?<!\w)\+?\d[\d\s().\-]{7,}\d(?!\w)/g, '[REDACTED_PHONE]')
