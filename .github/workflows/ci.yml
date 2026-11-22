@@ -60,8 +60,8 @@ jobs:
       - name: Install Dependencies
         run: bun install --frozen-lockfile
 
-      - name: TypeScript (no emit)
-        run: bunx tsc --noEmit
+      - name: TypeScript (no emit, compiler pinned in bun.lock)
+        run: bunx --no-install tsc --noEmit
 
       - name: Oxlint (correctness rules, config in .oxlintrc.json)
         run: bunx oxlint@1.94.0 src tests
