@@ -15,6 +15,7 @@ This guide takes a new operator from a clean checkout to a running agent. It des
 
 ```bash
 bun install
+(cd ui && bun install)   # the root install does not cover the UI package
 bun run build
 cp .env.example .env     # then edit; leave unknown values empty
 bun run cli doctor
@@ -26,7 +27,7 @@ bun run cli doctor
 
 | Setting | Why |
 |---|---|
-| `GEMINI_API_KEY`, or a signed-in `gcloud` with `GOOGLE_CLOUD_PROJECT` | The model needs credentials. |
+| `GEMINI_API_KEY`, or a signed-in `gcloud` with `GOOGLE_CLOUD_PROJECT` | The model needs credentials. `.env.example` ships a sample `GOOGLE_CLOUD_PROJECT`; the client uses that value over your active gcloud project, so replace it with a project you can access or empty it. |
 | `HOST` and `AGENT_DASHBOARD_TOKEN` | The cockpit binds `127.0.0.1` by default. If you set another `HOST`, startup refuses to run unless the token is at least 24 characters. |
 | `AGENT_ALLOWED_ORIGINS` | Only when the cockpit sits behind a reverse proxy. |
 | `AGENT_AUTOPILOT_BRAND_ID` | Names the tenant for memory isolation. Needed for Meta mode. |
@@ -43,7 +44,7 @@ Note: `.env.example` lists `DATA_DIR` and `GOOGLE_CLOUD_LOCATION`. The runtime e
 bun run dev                 # starts the server and the agent
 ```
 
-Open `http://localhost:3000`. The pairing dialog shows a QR code. In WhatsApp, open Linked devices and scan it. To use an 8-digit pairing code instead, run `bun run cli pair <phone>` and enter the code shown in the terminal.
+Open `http://localhost:3000`. The pairing dialog shows a QR code. In WhatsApp, open Linked devices and scan it. To use an 8-digit pairing code instead, stop `bun run dev` first (both use the session in `./data/session`), run `bun run cli pair <phone>` and enter the code shown in the terminal.
 
 The session is stored under `./data`. Back that directory up like a credential.
 
@@ -61,13 +62,13 @@ export AGENT_AUTOPILOT_BRAND_ID=...
 bun run start
 ```
 
-In the Meta app dashboard, set the webhook callback to `https://<your-public-host>/webhooks/meta` and the verify token to the same value. Meta calls this route without your dashboard cookie, so the route is public by design: GET is checked with the verify token and POST with an HMAC of the raw body. Your proxy must pass the body and the `X-Hub-Signature-256` header through unchanged. Details: [webhook routes](meta-cloud-webhook-routes.md) and [API adapter](meta-cloud-api-adapter.md).
+In the Meta app dashboard, set the webhook callback to `https://<your-public-host>/webhooks/meta` and the verify token to the same value. Meta calls this route without your dashboard cookie, so the route is public by design: GET is checked with the verify token and POST with an HMAC of the raw body. Your proxy must pass the body and the `X-Hub-Signature-256` header through unchanged. Also connect your WhatsApp Business Account to the app and subscribe the app to the `messages` webhook field. A verified callback alone does not make Meta deliver customer messages. Details: [webhook routes](meta-cloud-webhook-routes.md) and [API adapter](meta-cloud-api-adapter.md).
 
-Free-form text is blocked until the customer has sent an inbound message. This is tested with a fake Graph API only. No real Meta account has been used to verify it.
+Free-form text is only sent within 24 hours of the customer's latest inbound message; after that the adapter rejects it. This is tested with a fake Graph API only. No real Meta account has been used to verify it.
 
 ## 5. Choose a mode before real customers write in
 
-Each chat has a mode: `autopilot`, `copilot` or `human`. **The default for a new chat is `autopilot`, which replies on its own.** If you want review first, set `copilot` before linking a number that receives live traffic.
+Each chat has a mode: `autopilot`, `copilot` or `human`. **The default for a new chat is `autopilot`, which replies on its own.** There is no setting for a default mode, and a chat can only be switched after it exists. So the first message from a new sender is answered in `autopilot` before you can change it. If that is not acceptable, do not link a number that receives live traffic yet. This is a known gap, not a feature.
 
 Set a chat's mode in the cockpit, or:
 
