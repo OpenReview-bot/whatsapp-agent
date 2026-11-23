@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { createFableWhatsAppAgent } from '../src/index';
 
@@ -6,9 +6,9 @@ const CONFIG = {
   graphVersion: 'v23.0',
   phoneNumberId: '12345678901',
   businessAccountId: '98765432101',
-  accessToken: 'integration-test-only-token',
-  appSecret: 'integration-test-only-secret',
-  webhookVerifyToken: 'integration-test-verify-token'
+  accessToken: 'tok-' + randomUUID(),
+  appSecret: 'sec-' + randomUUID(),
+  webhookVerifyToken: 'ver-' + randomUUID()
 };
 const PHONE = '201011122233';
 const CHAT = PHONE + '@s.whatsapp.net';
@@ -86,7 +86,7 @@ describe('Meta runtime outbound composition', () => {
       expect(sentBody.success).toBe(true);
       expect(graphCalls).toHaveLength(1);
       expect(graphCalls[0].url).toBe('https://graph.facebook.com/v23.0/12345678901/messages');
-      expect(graphCalls[0].auth).toBe('Bearer integration-test-only-token');
+      expect(graphCalls[0].auth).toBe('Bearer ' + CONFIG.accessToken);
       expect(graphCalls[0].body).toMatchObject({
         messaging_product: 'whatsapp', to: PHONE, type: 'text',
         text: { body: 'أهلا بك', preview_url: false }
@@ -103,7 +103,9 @@ describe('Meta runtime outbound composition', () => {
       expect(ledger().getIntent(sentBody.intentId)?.state).toBe('delivered');
       expect((await post(receipt('wamid.outbound-1', 'read'))).status).toBe(200);
       expect(ledger().getIntent(sentBody.intentId)?.state).toBe('read');
-      // A late "delivered" must not move a read intent backwards.
+      // A replayed webhook event is dropped by the Meta adapter before it reaches the
+      // receipt handler, so this checks the end state only. Receipt ordering inside the
+      // ledger is covered in tests/delivery-lifecycle.test.ts.
       expect((await post(receipt('wamid.outbound-1', 'delivered'))).status).toBe(200);
       expect(ledger().getIntent(sentBody.intentId)?.state).toBe('read');
 
