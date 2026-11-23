@@ -419,7 +419,43 @@ export class SendLedger {
 
   accepted(id: string, attemptId: string, nativeMessageId: string, now = Date.now()): SendIntent | undefined {
     if (!nativeMessageId.trim()) throw new Error('Native message ID required');
-    return this.transitionAttempt(id, attemptId, 'accepted', 'accepted', 'transport_accepted', now, nativeMessageId);
+    return this.transitionAttempt(id, attemptId, 'accepted', 'accepted', 'transport_accepted', now, nativeMessageId)
+      ?? this.lateAcceptance(id, attemptId, nativeMessageId, now);
+  }
+
+  /**
+   * A sweeper can mark a slow in-flight attempt `uncertain` (lease expired) before the transport
+   * answers. If that same attempt then returns a native ID, the send is no longer uncertain:
+   * record the ID so receipts correlate and nobody retries a message that was delivered.
+   * Only the interrupted attempt itself qualifies, and only while the intent is still uncertain.
+   */
+  private lateAcceptance(id: string, attemptId: string, nativeMessageId: string, now: number): SendIntent | undefined {
+    return this.atomic(() => {
+      const intent = this.getIntent(id);
+      if (!intent || intent.state !== 'uncertain') return undefined;
+      // Never record acceptance before the interruption it follows, even if the clock moved backwards.
+      const interrupted = this.db.prepare('SELECT finished_at FROM send_attempts WHERE id=? AND intent_id=?').get(attemptId, id) as { finished_at?: number } | undefined;
+      now = Math.max(now, Number(interrupted?.finished_at ?? 0), intent.updatedAt);
+      const changed = this.db.prepare(`
+        UPDATE send_attempts SET outcome='accepted', failure_code='late_transport_acceptance', finished_at=?
+        WHERE id=? AND intent_id=? AND outcome='uncertain' AND failure_code='process_interrupted'
+      `).run(now, attemptId, id);
+      if (changed.changes !== 1) return undefined;
+      this.db.prepare(`
+        UPDATE send_intents SET state='accepted', native_message_id=?, updated_at=? WHERE id=? AND state='uncertain'
+      `).run(nativeMessageId, now, id);
+      this.event(id, 'uncertain', 'accepted', 'late_transport_acceptance', now);
+      // The message exists, so a retry child that has not started must not send a second copy.
+      const child = this.db.prepare('SELECT id, state FROM send_intents WHERE parent_intent_id=? LIMIT 1').get(id) as { id: string; state: SendIntentState } | undefined;
+      if (child?.state === 'queued') {
+        this.db.prepare(`UPDATE send_intents SET state='failed', updated_at=? WHERE id=? AND state='queued'`).run(now, child.id);
+        this.event(child.id, 'queued', 'failed', 'superseded_by_late_acceptance', now);
+      } else if (child) {
+        // The retry already started or finished: a duplicate may have reached the customer. Make that visible.
+        this.event(id, 'accepted', 'accepted', 'late_acceptance_after_retry_started', now);
+      }
+      return this.getIntent(id);
+    });
   }
 
   uncertain(id: string, attemptId: string, reason = 'ambiguous_failure', now = Date.now()): SendIntent | undefined {
