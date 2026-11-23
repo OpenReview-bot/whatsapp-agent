@@ -115,15 +115,18 @@ export function createApiServer(deps: {
     }
     const body = await c.req.json().catch(() => ({}));
     const phone = body.pairingPhoneNumber ? String(body.pairingPhoneNumber) : undefined;
-    void deps.whatsappClient.start(phone);
-    return c.json({ status: 'initiated', phone });
+    const refresh = Boolean(body.refresh);
+    void deps.whatsappClient.start(phone, { refresh });
+    return c.json({ status: 'initiated', phone, refresh });
   });
 
   app.post('/api/disconnect', async (c) => {
     if (deps.transportMode === 'meta-cloud') {
       return c.json({ error: 'Baileys disconnect is disabled in Meta Cloud transport mode' }, 409);
     }
-    await deps.whatsappClient.disconnect();
+    const body = await c.req.json().catch(() => ({}));
+    const clearSession = body.clearSession !== false;
+    await deps.whatsappClient.disconnect(clearSession);
     return c.json({ status: 'disconnected' });
   });
 

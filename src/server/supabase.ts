@@ -3,7 +3,7 @@ import { SQL } from 'bun';
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || '';
-const databaseUrl = process.env.DATABASE_URL || process.env.DATABASE_TRANSACTION_URL || '';
+const databaseUrl = process.env.DATABASE_TRANSACTION_URL || process.env.DATABASE_URL || '';
 
 let cachedClient: SupabaseClient | null = null;
 let cachedSql: SQL | null = null;
@@ -29,7 +29,7 @@ export function getPostgresClient(maxDepth = 1): SQL {
     throw new Error('Database client requires DATABASE_URL in environment');
   }
   if (!cachedSql) {
-    cachedSql = new SQL(databaseUrl, { max: 3, idleTimeout: 5 });
+    cachedSql = new SQL(databaseUrl, { max: 1, idleTimeout: 1 });
   }
   return cachedSql;
 }
@@ -61,18 +61,23 @@ export async function testDatabaseConnection() {
     return results;
   }
 
-  try {
-    const dbClient = getPostgresClient();
-    const rows = await dbClient`SELECT version(), current_database(), current_user`;
-    if (rows && rows.length > 0) {
-      results.postgresWire = true;
-      const firstRow = rows[0] as Record<string, unknown>;
-      results.postgresVersion = String(firstRow.version || '');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const dbClient = getPostgresClient();
+      const rows = await dbClient`SELECT version(), current_database(), current_user`;
+      if (rows && rows.length > 0) {
+        results.postgresWire = true;
+        const firstRow = rows[0] as Record<string, unknown>;
+        results.postgresVersion = String(firstRow.version || '');
+        results.error = null;
+        break;
+      }
+    } catch (err: unknown) {
+      results.error = `Postgres Wire error: ${err instanceof Error ? err.message : String(err)}`;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
     }
-  } catch (err) {
-    results.error = results.error
-      ? `${results.error}; Postgres Wire error: ${err instanceof Error ? err.message : String(err)}`
-      : `Postgres Wire error: ${err instanceof Error ? err.message : String(err)}`;
   }
 
   return results;

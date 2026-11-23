@@ -23,6 +23,7 @@ describe('Supabase & PostgreSQL Database Connection', () => {
 
   it.skipIf(!hasCredentials)('connects to Supabase PostgreSQL wire protocol via IPv4 pooler and executes queries when configured', async () => {
     const health = await testDatabaseConnection();
+    expect(health.error).toBeNull();
     expect(health.postgresWire).toBe(true);
     expect(health.postgresVersion).toContain('PostgreSQL');
 

@@ -9,7 +9,7 @@ interface PairingModalProps {
   status: SystemStatus | null;
   isOpen: boolean;
   onClose: () => void;
-  onConnect: (phone?: string) => void;
+  onConnect: (phone?: string, refresh?: boolean) => void;
   onDisconnect: () => void;
 }
 
@@ -70,7 +70,7 @@ export function PairingModal({ status, isOpen, onClose, onConnect, onDisconnect 
                     <li>{tr('ادخل إلى الأجهزة المرتبطة', 'Go to Linked devices')}</li>
                     <li>{tr('اختار ربط جهاز وامسح الرمز', 'Tap Link a device and scan this code')}</li>
                   </ol>
-                  <Button variant="ghost" label={tr('إنشاء رمز جديد', 'Generate a new code')} icon={<RefreshCw size={16} />} onClick={() => onConnect()} />
+                  <Button variant="ghost" label={tr('إنشاء رمز جديد', 'Generate a new code')} icon={<RefreshCw size={16} />} onClick={() => onConnect(undefined, true)} />
                 </div>
               ) : (
                 <div className="wa-phone-panel">
@@ -85,7 +85,7 @@ export function PairingModal({ status, isOpen, onClose, onConnect, onDisconnect 
                       <strong dir="ltr">{status.pairingCode}</strong>
                     </div>
                   )}
-                  <Button variant="primary" width="100%" label={tr('طلب كود الربط', 'Request pairing code')} isDisabled={!phoneNumber.trim()} onClick={() => onConnect(phoneNumber)} />
+                  <Button variant="primary" width="100%" label={tr('طلب كود الربط', 'Request pairing code')} isDisabled={!phoneNumber.trim()} onClick={() => onConnect(phoneNumber, true)} />
                 </div>
               )}
             </>

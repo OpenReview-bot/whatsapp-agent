@@ -348,8 +348,8 @@ export function App() {
     return api.simulate(text, senderName);
   };
 
-  const handleConnect = async (phone?: string) => {
-    await api.connect(phone);
+  const handleConnect = async (phone?: string, refresh?: boolean) => {
+    await api.connect(phone, refresh);
   };
 
   const handleDisconnect = async () => {

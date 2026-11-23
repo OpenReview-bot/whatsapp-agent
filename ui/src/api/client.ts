@@ -99,17 +99,21 @@ export const api = {
     return handleResponse<{ success: boolean; dossier: ContactDossier }>(res, 'Failed to add contact commitment');
   },
 
-  async connect(phoneNumber?: string): Promise<{ status: string }> {
+  async connect(phoneNumber?: string, refresh?: boolean): Promise<{ status: string }> {
     const res = await fetch(`${BASE_URL}/connect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pairingPhoneNumber: phoneNumber })
+      body: JSON.stringify({ pairingPhoneNumber: phoneNumber, refresh })
     });
     return handleResponse<{ status: string }>(res, 'Failed to initiate WhatsApp connection');
   },
 
-  async disconnect(): Promise<{ status: string }> {
-    const res = await fetch(`${BASE_URL}/disconnect`, { method: 'POST' });
+  async disconnect(clearSession: boolean = true): Promise<{ status: string }> {
+    const res = await fetch(`${BASE_URL}/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clearSession })
+    });
     return handleResponse<{ status: string }>(res, 'Failed to disconnect WhatsApp');
   },
 

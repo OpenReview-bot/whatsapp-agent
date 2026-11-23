@@ -12,6 +12,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import pino from 'pino';
+import { rmSync, mkdirSync } from 'node:fs';
 import type { AudioTranscriber } from '../ai/audio-transcriber';
 import type { ChatMessage, PairingState } from '../domain/types';
 
@@ -82,6 +83,22 @@ export class WhatsAppSocketClient {
     return { ...this.currentState };
   }
 
+  /**
+   * Atomically flushes the session directory to purge stale credentials
+   */
+  public clearSession(): void {
+    try {
+      rmSync(this.sessionDir, { recursive: true, force: true });
+      mkdirSync(this.sessionDir, { recursive: true });
+      this.authState = null;
+    } catch (err: unknown) {
+      const fsErr = err as { code?: string };
+      if (fsErr?.code !== 'ENOENT') {
+        console.warn('[WhatsApp] Failed to cleanly clear session directory:', err);
+      }
+    }
+  }
+
   private setState(updates: Partial<PairingState>) {
     this.currentState = {
       ...this.currentState,
@@ -94,17 +111,24 @@ export class WhatsAppSocketClient {
   /**
    * Initializes and starts the WhatsApp socket connection
    */
-  async start(pairingPhoneNumber?: string): Promise<void> {
+  async start(pairingPhoneNumber?: string, options?: { refresh?: boolean }): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.isExplicitlyClosed = false;
 
-    if (this.isConnecting) return;
-    this.isConnecting = true;
+    // Allow re-initiating if explicit refresh is requested or if not currently connecting
+    if (this.isConnecting && !options?.refresh) return;
+
+    if (options?.refresh) {
+      this.clearSession();
+    }
+
     if (pairingPhoneNumber) {
       this.pairingCodeRequestedNumber = pairingPhoneNumber.replace(/\D/g, '');
+    } else if (options?.refresh) {
+      this.pairingCodeRequestedNumber = null;
     }
 
     // Clean up any existing socket before reconnecting to prevent session conflicts
@@ -122,10 +146,22 @@ export class WhatsAppSocketClient {
       this.sock = null;
     }
 
+    this.isConnecting = true;
     this.setState({ state: 'connecting', error: undefined });
 
     try {
-      const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
+      let { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
+
+      // Self-heal: If auth credentials have `me` set but are unregistered (or corrupted from prior logout),
+      // Baileys will neither generate a QR code nor connect. Wipe the dead session and re-initialize.
+      if (state.creds?.me && !state.creds?.registered) {
+        console.warn('[WhatsApp] Detected stale unregistered credentials with me populated. Auto-flushing session...');
+        this.clearSession();
+        const freshAuth = await useMultiFileAuthState(this.sessionDir);
+        state = freshAuth.state;
+        saveCreds = freshAuth.saveCreds;
+      }
+
       this.authState = state;
       const { version } = await fetchLatestBaileysVersion();
 
@@ -149,6 +185,7 @@ export class WhatsAppSocketClient {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
+          this.isConnecting = false;
           const socket = this.sock;
           if (socket && this.pairingCodeRequestedNumber && !socket.authState?.creds?.registered) {
             try {
@@ -156,7 +193,8 @@ export class WhatsAppSocketClient {
               this.setState({
                 state: 'pairing_code_ready',
                 pairingCode: code,
-                qrDataUrl: undefined
+                qrDataUrl: undefined,
+                error: undefined
               });
             } catch (err: any) {
               this.setState({ error: `Failed to request pairing code: ${err.message}` });
@@ -215,6 +253,7 @@ export class WhatsAppSocketClient {
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
           if (statusCode === DisconnectReason.loggedOut) {
+            this.clearSession();
             this.setState({
               state: 'disconnected',
               error: 'Session logged out. Please re-pair your WhatsApp device.'
@@ -714,7 +753,7 @@ export class WhatsAppSocketClient {
   /**
    * Disconnects the socket
    */
-  async disconnect(): Promise<void> {
+  async disconnect(clearSession: boolean = false): Promise<void> {
     this.isExplicitlyClosed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -733,6 +772,9 @@ export class WhatsAppSocketClient {
         console.warn('[WhatsApp] Error during socket disconnect:', err);
       }
       this.sock = null;
+    }
+    if (clearSession) {
+      this.clearSession();
     }
     this.isConnecting = false;
     this.setState({
