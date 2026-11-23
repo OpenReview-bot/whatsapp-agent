@@ -2,6 +2,7 @@ import type { MemoryStore } from '../domain/memory-store';
 import type { DualMemoryManager, LearningPersistenceStore } from '../domain/learning-memory';
 import type { ReflectionEngine, ModerationFeedbackEvent, ReflectionResult } from '../ai/reflection-engine';
 import type { PostgresLearningStore } from '../persistence/postgres/learning-store';
+import { describeError, hashChatId, logEvent } from '../observability/safe-log';
 
 export interface ReflectionWorkerOptions {
   memoryStore: MemoryStore;
@@ -61,7 +62,7 @@ export class ReflectionWorker {
     const pg = this.persistenceStore as PostgresLearningStore | undefined;
     if (pg && typeof pg.updateThreadActivity === 'function') {
       void pg.updateThreadActivity(this.brandId, chatId, timestamp).catch((err) => {
-        console.warn('⚠️ [ReflectionWorker] Postgres thread activity update failed:', err.message);
+        console.warn('⚠️ [ReflectionWorker] Postgres thread activity update failed:', describeError(err));
       });
     }
   }
@@ -79,7 +80,7 @@ export class ReflectionWorker {
     const pg = this.persistenceStore as PostgresLearningStore | undefined;
     if (pg && typeof pg.recordModerationFeedback === 'function') {
       void pg.recordModerationFeedback({ ...feedback, brandId: this.brandId }).catch((err) => {
-        console.warn('⚠️ [ReflectionWorker] Postgres moderation feedback save failed:', err.message);
+        console.warn('⚠️ [ReflectionWorker] Postgres moderation feedback save failed:', describeError(err));
       });
     }
   }
@@ -102,7 +103,7 @@ export class ReflectionWorker {
           }
         }
       } catch (err: any) {
-        console.warn('⚠️ [ReflectionWorker] Failed to query cold threads from Postgres:', err.message);
+        console.warn('⚠️ [ReflectionWorker] Failed to query cold threads from Postgres:', describeError(err));
       }
     }
 
@@ -184,7 +185,7 @@ export class ReflectionWorker {
             feedback = [...feedback, ...pgFeedback];
           }
         } catch (err) {
-          console.warn('⚠️ [ReflectionWorker] getUnreflectedFeedback failed:', err instanceof Error ? err.message : String(err));
+          console.warn('⚠️ [ReflectionWorker] getUnreflectedFeedback failed:', describeError(err));
         }
       }
 
@@ -210,24 +211,24 @@ export class ReflectionWorker {
           summary: result.summary,
           createdAt: Date.now()
         }).catch((err) => {
-          console.warn('⚠️ [ReflectionWorker] Postgres saveReflectionRun failed:', err.message);
+          console.warn('⚠️ [ReflectionWorker] Postgres saveReflectionRun failed:', describeError(err));
         });
 
         if (typeof pg.markFeedbackReflected === 'function') {
           await pg.markFeedbackReflected(chatId).catch((err) => {
-            console.warn('⚠️ [ReflectionWorker] markFeedbackReflected failed:', err instanceof Error ? err.message : String(err));
+            console.warn('⚠️ [ReflectionWorker] markFeedbackReflected failed:', describeError(err));
           });
         }
         if (typeof pg.markThreadReflected === 'function') {
           await pg.markThreadReflected(this.brandId, chatId, record.lastReflectedAt).catch((err) => {
-            console.warn('⚠️ [ReflectionWorker] markThreadReflected failed:', err instanceof Error ? err.message : String(err));
+            console.warn('⚠️ [ReflectionWorker] markThreadReflected failed:', describeError(err));
           });
         }
       }
 
       return result;
     } catch (err: any) {
-      console.warn(`⚠️ [ReflectionWorker] Failed reflection for ${chatId} (${reason}):`, err.message);
+      logEvent('warn', 'reflection_failed', { chat: hashChatId(chatId), reason: String(reason), error: describeError(err) });
       return null;
     } finally {
       record.isProcessing = false;
@@ -241,7 +242,7 @@ export class ReflectionWorker {
     if (this.sweepTimer) return;
     this.sweepTimer = setInterval(() => {
       this.sweepColdThreads().catch((err) => {
-        console.warn('⚠️ [ReflectionWorker] Periodic sweep error:', err.message);
+        console.warn('⚠️ [ReflectionWorker] Periodic sweep error:', describeError(err));
       });
     }, intervalMs);
   }

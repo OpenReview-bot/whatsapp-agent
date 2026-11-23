@@ -30,6 +30,7 @@ import { ReflectionWorker } from './agent/reflection-worker';
 import { PostgresLearningStore } from './persistence/postgres/learning-store';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
 import { join } from 'node:path';
+import { describeBurst, describeError, hashChatId, logEvent } from './observability/safe-log';
 
 export async function createFableWhatsAppAgent(options: {
   port?: number;
@@ -89,7 +90,7 @@ export async function createFableWhatsAppAgent(options: {
     try {
       postgresLearningStore = new PostgresLearningStore({ databaseUrl: process.env.DATABASE_URL });
     } catch (err: any) {
-      console.warn('⚠️ [Fable Agentic WhatsApp] Failed to initialize PostgresLearningStore:', err.message);
+      console.warn('⚠️ [Fable Agentic WhatsApp] Failed to initialize PostgresLearningStore:', describeError(err));
     }
   }
 
@@ -157,7 +158,7 @@ export async function createFableWhatsAppAgent(options: {
         quotedMessage: burst.quotedMessage
       };
 
-      console.log(`💬 [Burst Fused] From: ${fusedMsg.senderName || fusedMsg.sender} | Messages: ${fusedMsg.text.replace(/\n/g, ' ↵ ')}`);
+      logEvent('info', 'burst_fused', describeBurst(fusedMsg));
 
       reflectionWorker.recordActivity(fusedMsg.chatId, fusedMsg.timestamp);
 
@@ -172,7 +173,7 @@ export async function createFableWhatsAppAgent(options: {
         });
 
         if (result.draftCreated) {
-          console.log(`📝 [Draft Created] Approval needed for chat ${fusedMsg.chatId}`);
+          logEvent('info', 'draft_created', { chat: hashChatId(fusedMsg.chatId) });
           sse.broadcast('new_draft', result.draftCreated);
         }
 
@@ -189,7 +190,7 @@ export async function createFableWhatsAppAgent(options: {
                   emoji: result.decision.suggestedReaction
                 });
               } catch (err) {
-                console.warn('[Delivery] Failed to send or persist reaction:', err);
+                console.warn('[Delivery] Failed to send or persist reaction:', describeError(err));
               }
             }
 
@@ -241,7 +242,7 @@ export async function createFableWhatsAppAgent(options: {
           });
         }
       } catch (err: any) {
-        console.error('❌ [Agent Processing Error]:', err.message);
+        logEvent('error', 'agent_processing_error', { error: describeError(err) });
       }
     }
   });
@@ -281,7 +282,7 @@ export async function createFableWhatsAppAgent(options: {
       console.log(`📡 [WhatsApp State] ${state.state}`);
       sse.broadcast('state_change', state);
       if (state.state === 'connected') {
-        void sendIntents?.dispatchDue().catch((error) => console.warn('[Delivery] Resume failed:', error));
+        void sendIntents?.dispatchDue().catch((error) => console.warn('[Delivery] Resume failed:', describeError(error)));
       }
     },
     onMessageStatus: ({ chatId, messageId, status }) => {
@@ -531,13 +532,13 @@ export async function createFableWhatsAppAgent(options: {
   if (proactiveAbort && proactiveScheduler) {
     void proactiveScheduler.start({
       signal: proactiveAbort.signal,
-      onError: (error) => console.warn('[Proactive] Scheduler tick failed:', error)
+      onError: (error) => console.warn('[Proactive] Scheduler tick failed:', describeError(error))
     });
   }
   if (options.autoConnect) {
     setInterval(() => {
       if (metaClient || whatsappClient.getState().state === 'connected') {
-        void sendIntents.dispatchDue().catch((error) => console.warn('[Delivery] Retry scan failed:', error));
+        void sendIntents.dispatchDue().catch((error) => console.warn('[Delivery] Retry scan failed:', describeError(error)));
       }
     }, 5000).unref();
     if (!metaClient) void whatsappClient.start();
