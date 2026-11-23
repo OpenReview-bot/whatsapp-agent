@@ -34,8 +34,8 @@ Owner-authenticated REST:
 
 ## Test evidence
 
-- `bun test tests/context-fold.test.ts tests/context-fold-integration.test.ts`: 16 passing
-- `bun test --reporter=dot`: 281 passing, 2 skipped, 0 failing as of 2026-11-08
+- `bun test tests/context-fold.test.ts tests/context-fold-integration.test.ts`: passing
+- `bun test --reporter=dot`: full backend suite; it must finish with no failures (run it for current counts)
 - `bunx tsc --noEmit`: passing
 - `bun run ui:build`: passing, existing large-chunk advisory
 

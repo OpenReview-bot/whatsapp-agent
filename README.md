@@ -6,7 +6,7 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
 
 ## Core capabilities
 
-- **Socket transport**: Browserless WebSocket engine powered by `@whiskeysockets/baileys` directly over the Noise Protocol (~80 MB RAM vs Chromium or Puppeteer). Supports QR and 8-digit phone pairing.
+- **Socket transport**: Browserless WebSocket engine powered by `@whiskeysockets/baileys` directly over the Noise Protocol without a Chromium or Puppeteer dependency. Supports QR and 8-digit phone pairing.
 - **Multi-model fallback**: Google Gemini (`gemini-4-argon`, `gemini-3.1-pro`, `gemini-3.8-flash`) via `gcloud` Application Default Credentials (ADC) or `GEMINI_API_KEY`. Fails closed on authentication errors (401/403); falls back automatically on rate limits (429) and upstream server errors (5xx).
 - **Human cadence simulation**: Inbound burst accumulator fuses rapid sequential messages into a single turn. Multi-bubble message splitting and randomized typing delays (1500 to 4500 ms) reflect natural conversational pacing.
 - **Push-to-talk voice notes**: Inbound audio notes (`audio/ogg`) are transcribed directly via Gemini. Outbound voice synthesis generates authentic WhatsApp voice notes (`ptt: true`) using Google Cloud Text-to-Speech.
@@ -15,7 +15,7 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
   - *Autopilot*: Automatic responses with simulated typing delay.
   - *Copilot*: Draft preparation with confidence scores and reasoning traces for one-click human approval.
   - *Human*: Silent observation with manual operator control.
-- **Model Context Protocol (MCP)**: Native stdio and HTTP MCP server exposing 10 tools for Claude Desktop, Gemini CLI, Cursor, and custom agent integrations.
+- **Model Context Protocol (MCP)**: Native stdio and HTTP MCP server exposing 13 tools for Claude Desktop, Gemini CLI, Cursor, and custom agent integrations.
 - **Persistence and migration**: Chat, draft and capability runtime stores currently use SQLite WAL. PostgreSQL migration/import tooling and an optional PostgreSQL-backed learning-memory store exist; the complete runtime cutover is pending. See [Implementation status](docs/IMPLEMENTATION_STATUS.md).
 - **Web cockpit**: React 19 interface with Tailwind CSS, bilingual layout (Arabic RTL and English LTR), real-time Server-Sent Events (SSE), Brand Brain manager, and token-gated access.
 
@@ -117,14 +117,17 @@ To use WhatsApp Agent tools inside Claude Desktop, Cursor, or Gemini CLI, regist
 |---|---|---|
 | `whatsapp_list_chats` | `limit?: number, unreadOnly?: boolean` | List active conversations, contact names, unread message counts, and current agent modes. |
 | `whatsapp_get_messages` | `chatId: string, limit?: number` | Retrieve message history, timestamps, sender IDs, and voice note transcriptions. |
-| `whatsapp_send_message` | `chatId: string, text: string, replyToMessageId?: string` | Send a WhatsApp message with simulated human typing cadence. |
+| `whatsapp_send_message` | `chatId: string, text: string, replyToMessageId?: string, mutationId?: string` | Send a WhatsApp message with simulated human typing cadence. Reuse the same `mutationId` when retrying so the send is not duplicated. |
 | `whatsapp_send_reaction` | `chatId: string, messageId: string, emoji: string` | Send an emoji reaction to a specific message. |
 | `whatsapp_get_status` | *(none)* | Inspect companion socket connection status, phone number, and pending drafts. |
 | `whatsapp_set_chat_mode` | `chatId: string, mode: "autopilot" \| "copilot" \| "human"` | Set agent operation mode for a specific conversation. |
 | `whatsapp_approve_draft` | `draftId: string, editedText?: string` | Approve and dispatch a pending copilot draft reply. |
 | `whatsapp_manage_memory` | `chatId: string, action: string, content?: string, index?: number` | Inspect, save, or delete long-term contact preferences with credential filtering. |
 | `whatsapp_set_chat_style` | `chatId: string, style: string` | Configure tone: `professional`, `casual`, `playful`, `assertive`, or `empathetic`. |
-| `whatsapp_funnel_scatter_gather` | `method: string, payload?: object, queryParams?: object` | Execute concurrent scatter-gather dispatch across external systems with circuit-breaking. |
+| `whatsapp_search_chat_memory` | `chatId: string, query: string, limit?: number` | Search one chat in raw messages and summarized historical folds. |
+| `whatsapp_get_chat_folds` | `chatId: string` | List historical session and milestone fold summaries for one chat. |
+| `whatsapp_decompress_fold` | `chatId: string, foldId: string, aroundMessageId?: string, offset?: number, limit?: number` | Inspect the raw messages behind a fold, or one message with two neighbors on each side. |
+| `whatsapp_funnel_scatter_gather` | `method: string, payload?: object, queryParams?: object, timeoutMs?: number` | Execute concurrent scatter-gather dispatch across external systems with circuit-breaking. Only registered when the funnel engine is configured. |
 
 ## Command-line interface
 
@@ -139,10 +142,10 @@ bun run cli simulate "Can I get pricing for the enterprise tier?"
 bun run cli pair
 
 # Run PostgreSQL schema migrations
-bun run db:postgres migrate
+bun run db:postgres --schema
 
 # Import existing SQLite chat records into PostgreSQL offline
-bun run db:postgres import
+bun run db:postgres --import --apply --data-dir ./data --legacy-brand <brand-id>
 
 # Execute polyglot dependency vulnerability audit
 bun run security:audit
