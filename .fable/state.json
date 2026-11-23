@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 147,
+  "stateRevision": 151,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 26,
-  "verifiedGeneration": 26,
+  "mutationGeneration": 28,
+  "verifiedGeneration": 28,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -634,7 +634,31 @@
       "generation": 26,
       "timestamp": "2026-11-23T21:18:30.819Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "529 pass across 122 files",
+      "repositoryRevision": "ad51389d8dc5ce4211acbc3bf68d9e669fd54f18",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 27,
+      "timestamp": "2026-11-23T21:19:20.941Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "529 pass across 122 files",
+      "repositoryRevision": "50176011cdc561d605a4eff765efbd18effbd9db",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 28,
+      "timestamp": "2026-11-23T21:19:57.192Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-23T21:18:30.819Z"
+  "updatedAt": "2026-11-23T21:19:57.192Z"
 }
