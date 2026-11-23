@@ -6,7 +6,7 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
 
 ## Core capabilities
 
-- **Socket transport**: Browserless WebSocket engine powered by `@whiskeysockets/baileys` directly over the Noise Protocol without a Chromium or Puppeteer dependency. Supports QR and 8-digit phone pairing.
+- **Socket transport**: Browserless WebSocket engine powered by `@whiskeysockets/baileys` directly over the Noise Protocol (no browser engine; measured about 96 MiB resident at idle, unpaired, with no traffic, see docs/ENDPOINTS_AND_ENVIRONMENT.md). Supports QR and 8-digit phone pairing.
 - **Multi-model fallback**: Google Gemini (`gemini-4-argon`, `gemini-3.1-pro`, `gemini-3.8-flash`) via `gcloud` Application Default Credentials (ADC) or `GEMINI_API_KEY`. Fails closed on authentication errors (401/403); falls back automatically on rate limits (429) and upstream server errors (5xx).
 - **Human cadence simulation**: Inbound burst accumulator fuses rapid sequential messages into a single turn. Multi-bubble message splitting and randomized typing delays (1500 to 4500 ms) reflect natural conversational pacing.
 - **Push-to-talk voice notes**: Inbound audio notes (`audio/ogg`) are transcribed directly via Gemini. Outbound voice synthesis generates authentic WhatsApp voice notes (`ptt: true`) using Google Cloud Text-to-Speech.
