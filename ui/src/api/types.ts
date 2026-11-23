@@ -127,3 +127,21 @@ export interface PolicyConfig {
     action?: string;
   }>;
 }
+
+export interface WorkspaceStats {
+  chatsCount: number;
+  messagesCount: number;
+  draftsCount: number;
+  memoriesCount: number;
+  foldsCount: number;
+  dbSizeBytes: number;
+  connectionState: SystemStatus['state'];
+  connectedUser?: SystemStatus['connectedUser'];
+  transportMode: string;
+}
+
+export interface WorkspaceCleanResult {
+  success: boolean;
+  freedBytes: number;
+  cleanedItems: string[];
+}

@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatSummary, ModeratorPersona, PolicyConfig, SystemStatus, AgentDraft, ContactDossier } from './types';
+import type { ChatMessage, ChatSummary, ModeratorPersona, PolicyConfig, SystemStatus, AgentDraft, ContactDossier, WorkspaceStats, WorkspaceCleanResult } from './types';
 
 const BASE_URL = '/api';
 
@@ -275,5 +275,40 @@ export const api = {
       body: JSON.stringify(data)
     });
     return handleResponse<StickerResult>(res, 'Failed to generate sticker');
+  },
+
+  async deleteChat(chatId: string): Promise<{ success: boolean; chatId: string }> {
+    const res = await fetch(`${BASE_URL}/chats/${encodeURIComponent(chatId)}`, {
+      method: 'DELETE'
+    });
+    return handleResponse<{ success: boolean; chatId: string }>(res, 'Failed to delete chat');
+  },
+
+  async clearChatMessages(chatId: string): Promise<{ success: boolean; chatId: string }> {
+    const res = await fetch(`${BASE_URL}/chats/${encodeURIComponent(chatId)}/messages`, {
+      method: 'DELETE'
+    });
+    return handleResponse<{ success: boolean; chatId: string }>(res, 'Failed to clear chat messages');
+  },
+
+  async getWorkspaceStats(): Promise<WorkspaceStats> {
+    const res = await fetch(`${BASE_URL}/workspace/stats`);
+    return handleResponse<WorkspaceStats>(res, 'Failed to fetch workspace storage stats');
+  },
+
+  async cleanWorkspace(): Promise<WorkspaceCleanResult> {
+    const res = await fetch(`${BASE_URL}/workspace/clean`, {
+      method: 'POST'
+    });
+    return handleResponse<WorkspaceCleanResult>(res, 'Failed to clean workspace cache');
+  },
+
+  async resetWorkspace(target: 'all' | 'session' | 'chats' | 'drafts' | 'memories' | 'learning' | 'cache'): Promise<{ success: boolean; target: string; [key: string]: unknown }> {
+    const res = await fetch(`${BASE_URL}/workspace/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target })
+    });
+    return handleResponse<{ success: boolean; target: string }>(res, `Failed to reset workspace ${target}`);
   }
 };

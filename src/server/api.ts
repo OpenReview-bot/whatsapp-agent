@@ -18,6 +18,7 @@ import { registerDashboardAuth } from './dashboard-auth';
 import { UserMemoryManager } from '../domain/user-memory';
 import type { ConversationStyle } from '../ai/adaptive-style';
 import { handleGitHubWebhook } from './github-webhook';
+import { cleanWorkspaceData } from './workspace-cleaner';
 import type { DualMemoryManager } from '../domain/learning-memory';
 import type { ReflectionWorker } from '../agent/reflection-worker';
 import type { ReflectionEngine } from '../ai/reflection-engine';
@@ -45,10 +46,12 @@ export interface ApiDependencies {
   sendIntents?: SendIntentService;
   diagnostics?: DiagnosticsCore;
   transportMode?: 'baileys' | 'meta-cloud';
+  dataDir?: string;
 }
 
 export function createApiServer(deps: ApiDependencies): Hono {
   const app = new Hono();
+  const getWorkspaceDataDir = () => deps.dataDir ?? deps.memoryStore.getDataDir?.() ?? './data';
   let delivery = deps.sendIntents;
   const getDelivery = () => delivery ??= new SendIntentService({
     memoryStore: deps.memoryStore,
@@ -136,6 +139,26 @@ export function createApiServer(deps: ApiDependencies): Hono {
   app.get('/api/chats', (c) => {
     const chats = deps.memoryStore.listChats();
     return c.json({ chats });
+  });
+
+  app.delete('/api/chats/:chatId', async (c) => {
+    let chatId = c.req.param('chatId');
+    if (deps.whatsappClient?.canonicalizeJid) {
+      chatId = await deps.whatsappClient.canonicalizeJid(chatId);
+    }
+    const success = deps.memoryStore.deleteChat(chatId);
+    deps.sse.broadcast('chat_deleted', { chatId });
+    return c.json({ success, chatId });
+  });
+
+  app.delete('/api/chats/:chatId/messages', async (c) => {
+    let chatId = c.req.param('chatId');
+    if (deps.whatsappClient?.canonicalizeJid) {
+      chatId = await deps.whatsappClient.canonicalizeJid(chatId);
+    }
+    const success = deps.memoryStore.clearChatMessages(chatId);
+    deps.sse.broadcast('messages_cleared', { chatId });
+    return c.json({ success, chatId });
   });
 
   app.get('/api/chats/:chatId/folds', async (c) => {
@@ -760,6 +783,89 @@ export function createApiServer(deps: ApiDependencies): Hono {
   app.post('/api/webhooks/github', async (c) => {
     // verifySignature verifies x-hub-signature-256 HMAC
     return handleGitHubWebhook(c);
+  });
+
+  // --- Workspace & Data Lifecycle Management ---
+
+  app.get('/api/workspace/stats', (c) => {
+    const stats = deps.memoryStore.getStorageStats();
+    const wsState = deps.whatsappClient.getState();
+    return c.json({
+      ...stats,
+      connectionState: wsState.state,
+      connectedUser: wsState.connectedUser,
+      transportMode: deps.transportMode ?? 'baileys'
+    });
+  });
+
+  app.post('/api/workspace/clean', (c) => {
+    const cleanResult = cleanWorkspaceData(getWorkspaceDataDir());
+    deps.memoryStore.checkpointAndVacuum();
+    return c.json({
+      success: cleanResult.success,
+      freedBytes: cleanResult.freedBytes,
+      cleanedItems: cleanResult.cleanedItems
+    });
+  });
+
+  app.post('/api/workspace/reset', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const target = String(body?.target || 'all');
+
+    if (target === 'all') {
+      await deps.whatsappClient.disconnect(true);
+      const resetResult = deps.memoryStore.resetAll();
+      deps.dualMemoryManager?.resetLearning();
+      const cleanResult = cleanWorkspaceData(getWorkspaceDataDir());
+      deps.sse.broadcast('workspace_reset', { target: 'all' });
+      return c.json({
+        success: true,
+        target: 'all',
+        clearedTables: resetResult.clearedTables,
+        freedBytes: cleanResult.freedBytes
+      });
+    }
+
+    if (target === 'session') {
+      await deps.whatsappClient.disconnect(true);
+      deps.sse.broadcast('workspace_reset', { target: 'session' });
+      return c.json({ success: true, target: 'session' });
+    }
+
+    if (target === 'chats') {
+      const result = deps.memoryStore.clearAllChats();
+      deps.sse.broadcast('workspace_reset', { target: 'chats' });
+      deps.sse.broadcast('chat_updated', {});
+      return c.json({ success: true, target: 'chats', details: result });
+    }
+
+    if (target === 'drafts') {
+      const deleted = deps.memoryStore.clearAllDrafts();
+      deps.sse.broadcast('workspace_reset', { target: 'drafts' });
+      deps.sse.broadcast('draft_updated', {});
+      return c.json({ success: true, target: 'drafts', deleted });
+    }
+
+    if (target === 'memories') {
+      const result = deps.memoryStore.clearAllMemories();
+      deps.sse.broadcast('workspace_reset', { target: 'memories' });
+      return c.json({ success: true, target: 'memories', details: result });
+    }
+
+    if (target === 'learning') {
+      deps.dualMemoryManager?.resetLearning();
+      const result = deps.memoryStore.clearAllLearning();
+      deps.sse.broadcast('workspace_reset', { target: 'learning' });
+      return c.json({ success: true, target: 'learning', details: result });
+    }
+
+    if (target === 'cache') {
+      const cleanResult = cleanWorkspaceData(getWorkspaceDataDir());
+      deps.memoryStore.checkpointAndVacuum();
+      return c.json({ success: true, target: 'cache', freedBytes: cleanResult.freedBytes });
+    }
+
+    return c.json({ error: `Unknown reset target '${target}'. Allowed: all, session, chats, drafts, memories, learning, cache` }, 400);
   });
 
   return app;

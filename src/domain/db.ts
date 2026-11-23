@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { SendLedger } from './send-ledger';
 import { FoldRepository } from './fold-repository';
@@ -714,6 +714,170 @@ export class SqliteStore {
 
   getSendLedger(): SendLedger {
     return this.sendLedger;
+  }
+
+  /**
+   * Deletes a single chat and all associated data (messages, folds, drafts, dossier, memories, intents)
+   */
+  deleteChat(chatId: string): boolean {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM conversation_folds WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM drafts WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM contact_dossiers WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM contact_memories WHERE jid = ?').run(chatId);
+      this.db.prepare('DELETE FROM learning_reflections WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM send_intents WHERE chat_id = ?').run(chatId);
+      const res = this.db.prepare('DELETE FROM chats WHERE id = ?').run(chatId);
+      return res.changes > 0;
+    });
+    return transaction();
+  }
+
+  /**
+   * Clears messages and folds for a chat without removing the contact dossier or chat entry
+   */
+  clearChatMessages(chatId: string): boolean {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM messages WHERE chat_id = ?').run(chatId);
+      this.db.prepare('DELETE FROM conversation_folds WHERE chat_id = ?').run(chatId);
+      this.db.prepare('UPDATE chats SET last_message = \'\', last_timestamp = ?, unread_count = 0 WHERE id = ?').run(Date.now(), chatId);
+      return true;
+    });
+    return transaction();
+  }
+
+  /**
+   * Purges all chats, messages, and conversation folds
+   */
+  clearAllChats(): { deletedChats: number; deletedMessages: number } {
+    const transaction = this.db.transaction(() => {
+      const msgRes = this.db.prepare('DELETE FROM messages').run();
+      this.db.prepare('DELETE FROM conversation_folds').run();
+      const chatRes = this.db.prepare('DELETE FROM chats').run();
+      return { deletedChats: chatRes.changes, deletedMessages: msgRes.changes };
+    });
+    return transaction();
+  }
+
+  /**
+   * Purges all drafts across all chats
+   */
+  clearAllDrafts(): number {
+    const res = this.db.prepare('DELETE FROM drafts').run();
+    return res.changes;
+  }
+
+  /**
+   * Purges all contact dossiers and contact memories
+   */
+  clearAllMemories(): { deletedDossiers: number; deletedMemories: number } {
+    const transaction = this.db.transaction(() => {
+      const memRes = this.db.prepare('DELETE FROM contact_memories').run();
+      const dosRes = this.db.prepare('DELETE FROM contact_dossiers').run();
+      return { deletedDossiers: dosRes.changes, deletedMemories: memRes.changes };
+    });
+    return transaction();
+  }
+
+  /**
+   * Clears learning states and reflection logs from database
+   */
+  clearAllLearning(): { deletedStates: number; deletedReflections: number } {
+    const transaction = this.db.transaction(() => {
+      const stateRes = this.db.prepare('DELETE FROM learning_states').run();
+      const refRes = this.db.prepare('DELETE FROM learning_reflections').run();
+      return { deletedStates: stateRes.changes, deletedReflections: refRes.changes };
+    });
+    return transaction();
+  }
+
+  /**
+   * Computes counts across stored tables and database file size on disk
+   */
+  getStorageStats(): {
+    chatsCount: number;
+    messagesCount: number;
+    draftsCount: number;
+    memoriesCount: number;
+    foldsCount: number;
+    dbSizeBytes: number;
+  } {
+    const chats = (this.db.query('SELECT COUNT(*) as c FROM chats LIMIT 1;').get() as { c?: number })?.c || 0;
+    const messages = (this.db.query('SELECT COUNT(*) as c FROM messages LIMIT 1;').get() as { c?: number })?.c || 0;
+    const drafts = (this.db.query('SELECT COUNT(*) as c FROM drafts LIMIT 1;').get() as { c?: number })?.c || 0;
+    const memories = (this.db.query('SELECT COUNT(*) as c FROM contact_memories LIMIT 1;').get() as { c?: number })?.c || 0;
+    const folds = (this.db.query('SELECT COUNT(*) as c FROM conversation_folds LIMIT 1;').get() as { c?: number })?.c || 0;
+
+    let dbSizeBytes = 0;
+    try {
+      if (this.dbPath !== ':memory:') {
+        const stats = statSync(this.dbPath);
+        dbSizeBytes = stats.size;
+      }
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code !== 'ENOENT') {
+        console.warn('[SqliteStore] Could not determine database file size:', err);
+      }
+    }
+
+    return {
+      chatsCount: chats,
+      messagesCount: messages,
+      draftsCount: drafts,
+      memoriesCount: memories,
+      foldsCount: folds,
+      dbSizeBytes
+    };
+  }
+
+  /**
+   * Flushes WAL journals to disk, truncates them, and reclaims fragmented SQLite pages
+   */
+  checkpointAndVacuum(): void {
+    if (this.dbPath === ':memory:') return;
+    try {
+      this.db.run('PRAGMA wal_checkpoint(TRUNCATE);');
+      this.db.run('VACUUM;');
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code !== 'SQLITE_IOERR_VNODE') {
+        console.warn('[SqliteStore] Error during checkpoint and vacuum:', err);
+      }
+    }
+  }
+
+  /**
+   * Wipes all persisted application tables and reclaims disk space
+   */
+  resetAll(): { success: boolean; clearedTables: string[] } {
+    const clearedTables = [
+      'messages',
+      'conversation_folds',
+      'drafts',
+      'contact_dossiers',
+      'contact_memories',
+      'learning_states',
+      'learning_reflections',
+      'send_intents',
+      'chats'
+    ];
+
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM messages;').run();
+      this.db.prepare('DELETE FROM conversation_folds;').run();
+      this.db.prepare('DELETE FROM drafts;').run();
+      this.db.prepare('DELETE FROM contact_dossiers;').run();
+      this.db.prepare('DELETE FROM contact_memories;').run();
+      this.db.prepare('DELETE FROM learning_states;').run();
+      this.db.prepare('DELETE FROM learning_reflections;').run();
+      this.db.prepare('DELETE FROM send_intents;').run();
+      this.db.prepare('DELETE FROM chats;').run();
+      return true;
+    });
+
+    transaction();
+    this.checkpointAndVacuum();
+    return { success: true, clearedTables };
   }
 
   close() {

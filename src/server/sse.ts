@@ -9,7 +9,10 @@ export type SSEEventType =
   | 'draft_updated'
   | 'chat_updated'
   | 'message_reaction'
-  | 'dossier_updated';
+  | 'dossier_updated'
+  | 'chat_deleted'
+  | 'messages_cleared'
+  | 'workspace_reset';
 
 export interface SSEMessage {
   event: SSEEventType;

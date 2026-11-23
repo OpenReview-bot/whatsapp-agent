@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 154,
+  "stateRevision": 161,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 29,
-  "verifiedGeneration": 29,
+  "mutationGeneration": 32,
+  "verifiedGeneration": 32,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -682,7 +682,55 @@
       "generation": 29,
       "timestamp": "2026-11-23T21:28:22.016Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "529 pass across 122 files",
+      "repositoryRevision": "af7b6ed30790297da386a58ccbebca4ceb123d6b",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 30,
+      "timestamp": "2026-11-23T21:28:58.352Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "536 passed, 0 failed, 1 skip",
+      "repositoryRevision": "af7b6ed30790297da386a58ccbebca4ceb123d6b",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 30,
+      "timestamp": "2026-11-23T23:03:23.528Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "536 passed, 0 failed, 1 skip",
+      "repositoryRevision": "87530a69902279c8996251aa2ebcc841b1d76dd9",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 31,
+      "timestamp": "2026-11-23T23:08:29.392Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "536 passed, 0 failed, 1 skip",
+      "repositoryRevision": "d2e68965084ea72ba8479b7f4f79a6a58f9befdd",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 32,
+      "timestamp": "2026-11-23T23:09:11.594Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-23T21:28:22.016Z"
+  "updatedAt": "2026-11-23T23:09:11.594Z"
 }

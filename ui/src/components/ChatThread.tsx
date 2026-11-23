@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArrowRight, Check, CheckCheck, Clock3, FileText, MessageCircle, Mic, Reply, Send, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, Check, CheckCheck, Clock3, FileText, MessageCircle, Mic, Reply, Send, Trash2, X } from 'lucide-react';
 import { Gemini } from '@lobehub/icons';
 import { Avatar } from '@lobehub/ui';
 import type { AgentMode, ChatMessage, ChatSummary } from '../api/types';
+import { api } from '../api/client';
 import { useLocale, type Language } from '../locale-context';
+import { useModalDismiss } from '../hooks/useModalDismiss';
 
 interface ChatThreadProps {
   chat?: ChatSummary;
@@ -14,6 +16,8 @@ interface ChatThreadProps {
   onChangeMode: (mode: AgentMode) => Promise<void>;
   onBack: () => void;
   onOpenInspector: () => void;
+  onDeleteChat?: (chatId: string) => Promise<void>;
+  onClearMessages?: (chatId: string) => Promise<void>;
 }
 
 const modeOptions: Array<{ value: AgentMode; label: string }> = [
@@ -26,7 +30,7 @@ function messageTime(timestamp: number, language: Language): string {
   return new Date(timestamp).toLocaleTimeString(language === 'ar' ? 'ar-EG' : 'en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-export function ChatThread({ chat, messages, onSendMessage, onRetrySendIntent, onSendReaction, onChangeMode, onBack, onOpenInspector }: ChatThreadProps) {
+export function ChatThread({ chat, messages, onSendMessage, onRetrySendIntent, onSendReaction, onChangeMode, onBack, onOpenInspector, onDeleteChat, onClearMessages }: ChatThreadProps) {
   const { language, tr } = useLocale();
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -35,9 +39,13 @@ export function ChatThread({ chat, messages, onSendMessage, onRetrySendIntent, o
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [confirmRetryId, setConfirmRetryId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const sendMutationId = useRef(crypto.randomUUID());
   const retryMutationIds = useRef(new Map<string, string>());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useModalDismiss(showManageModal, () => setShowManageModal(false));
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'auto' });
@@ -122,7 +130,18 @@ export function ChatThread({ chat, messages, onSendMessage, onRetrySendIntent, o
           <h2>{chat.name} {chat.isGroup && <span className="wa-group-label">{tr('مجموعة', 'Group')}</span>}</h2>
           <p dir="auto">{chat.phoneNumber || tr('محادثة واتساب', 'WhatsApp conversation')}</p>
         </div>
-        <button type="button" className="wa-thread-agent wa-icon-button" onClick={onOpenInspector} aria-label={tr('عرض المساعد الذكي', 'Show AI assistant')} title={tr('عرض المساعد الذكي', 'Show AI assistant')}><Gemini.Color size={21} /></button>
+        <div className="wa-thread-actions" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button
+            type="button"
+            className="wa-icon-button"
+            onClick={() => setShowManageModal(true)}
+            aria-label={tr('إدارة بيانات المحادثة', 'Manage chat data')}
+            title={tr('إدارة بيانات المحادثة', 'Manage chat data')}
+          >
+            <Trash2 size={18} />
+          </button>
+          <button type="button" className="wa-thread-agent wa-icon-button" onClick={onOpenInspector} aria-label={tr('عرض المساعد الذكي', 'Show AI assistant')} title={tr('عرض المساعد الذكي', 'Show AI assistant')}><Gemini.Color size={21} /></button>
+        </div>
       </header>
 
       <div className="wa-chat-mode-bar">
@@ -250,6 +269,103 @@ export function ChatThread({ chat, messages, onSendMessage, onRetrySendIntent, o
           </button>
         </div>
       </form>
+      {showManageModal && (
+        <div
+          className="wa-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowManageModal(false);
+          }}
+        >
+          {/* react-doctor-disable-next-line react-doctor/prefer-html-dialog */}
+          <section
+            className="wa-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="chat-manage-title"
+            style={{ maxHeight: 'min(90dvh, 720px)', overflowY: 'auto' }}
+          >
+            <div className="wa-modal-header">
+              <div className="wa-modal-heading">
+                <span className="wa-modal-icon" style={{ background: '#fef2f2', color: '#b91c1c' }}>
+                  <Trash2 size={20} />
+                </span>
+                <div>
+                  <h2 id="chat-manage-title">{tr('إدارة بيانات المحادثة', 'Manage conversation data')}</h2>
+                  <p dir="auto">{chat.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="wa-icon-button"
+                onClick={() => setShowManageModal(false)}
+                aria-label={tr('إلغاء', 'Close')}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="wa-modal-content">
+              <p style={{ fontSize: '12px', color: 'var(--wa-muted, #64746f)', margin: '0 0 16px', lineHeight: '1.6' }}>
+                {tr(
+                  'يمكنك مسح سجل الرسائل فقط للبدء من جديد مع بقاء جهة الاتصال والذاكرة، أو حذف المحادثة بالكامل من قاعدة البيانات.',
+                  'You can clear messages to start fresh while preserving the contact, or delete the conversation thread completely.'
+                )}
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="wa-ps-button wa-ps-button-quiet"
+                  style={{ justifyContent: 'flex-start', padding: '12px 14px' }}
+                  disabled={actionLoading}
+                  onClick={async () => {
+                    setActionLoading(true);
+                    try {
+                      if (onClearMessages) {
+                        await onClearMessages(chat.id);
+                      } else {
+                        await api.clearChatMessages(chat.id);
+                      }
+                      setShowManageModal(false);
+                    } catch {
+                      setError(tr('فشل مسح الرسائل', 'Failed to clear messages'));
+                    } finally {
+                      setActionLoading(false);
+                    }
+                  }}
+                >
+                  <Trash2 size={16} />
+                  <span>{tr('مسح الرسائل فقط', 'Clear messages only')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="wa-ps-button wa-ps-button-danger"
+                  style={{ justifyContent: 'flex-start', padding: '12px 14px' }}
+                  disabled={actionLoading}
+                  onClick={async () => {
+                    setActionLoading(true);
+                    try {
+                      if (onDeleteChat) {
+                        await onDeleteChat(chat.id);
+                      } else {
+                        await api.deleteChat(chat.id);
+                      }
+                      setShowManageModal(false);
+                      onBack();
+                    } catch {
+                      setError(tr('فشل حذف المحادثة', 'Failed to delete chat'));
+                    } finally {
+                      setActionLoading(false);
+                    }
+                  }}
+                >
+                  <Trash2 size={16} />
+                  <span>{tr('حذف المحادثة بالكامل', 'Delete conversation completely')}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

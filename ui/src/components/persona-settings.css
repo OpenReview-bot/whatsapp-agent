@@ -136,6 +136,24 @@
 .wa-ps-button-outline { color: var(--ps-green); background: #fff; border: 1px solid #d4e3dc; }
 .wa-ps-button-outline:not(:disabled):hover { background: #f0f8f4; }
 .wa-ps-button:disabled { opacity: .53; }
+.wa-ps-button-danger { color: #b91c1c; background: #fff; border: 1px solid #fecaca; }
+.wa-ps-button-danger:not(:disabled):hover { background: #fef2f2; border-color: #f87171; }
+.wa-ps-card-danger { border-color: #fee2e2; background: #fffafa; }
+.wa-ps-card-danger h2 { color: #991b1b; }
+.wa-ps-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 11px; margin-top: 14px; }
+.wa-ps-stat-box { padding: 12px 14px; border-radius: 10px; background: #f7faf8; border: 1px solid #e1ebe5; display: flex; flex-direction: column; gap: 4px; }
+.wa-ps-stat-box-value { font-size: 19px; font-weight: 800; color: #123c2e; }
+.wa-ps-stat-box-label { font-size: 10px; color: var(--ps-muted); font-weight: 600; }
+.wa-ps-action-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.wa-ps-action-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #e5ebe7; border-radius: 10px; background: #fff; }
+.wa-ps-action-item-info strong { display: block; font-size: 12px; color: #273832; margin-bottom: 3px; }
+.wa-ps-action-item-info small { font-size: 11px; color: var(--ps-muted); line-height: 1.5; }
+.wa-ps-feedback-banner { padding: 12px 14px; border-radius: 9px; font-size: 12px; margin-bottom: 15px; display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.wa-ps-feedback-banner.is-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+.wa-ps-feedback-banner.is-error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.wa-ps-modal-danger-box { margin: 12px 0 16px; padding: 12px; background: #fef2f2; border: 1px solid #fee2e2; border-radius: 8px; color: #991b1b; font-size: 11.5px; line-height: 1.6; }
+.wa-ps-modal-confirm-input { width: 100%; padding: 10px 12px; border: 1px solid #d4ded9; border-radius: 8px; font-size: 13px; font-weight: 700; letter-spacing: 1px; margin-top: 8px; }
+.wa-ps-modal-confirm-input:focus { outline: none; border-color: #ef4444; box-shadow: 0 0 0 3px #ef444422; }
 .wa-ps-scroll-area { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 clamp(20px, 2.5vw, 44px); }
 .wa-ps-columns { display: grid; grid-template-columns: minmax(0, 1.56fr) minmax(280px, 1fr); gap: 20px; align-items: start; max-width: 1420px; margin-inline: auto; }
 .wa-ps-primary-column,.wa-ps-context-column { display: flex; flex-direction: column; min-width: 0; gap: 15px; }

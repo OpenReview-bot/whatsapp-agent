@@ -93,8 +93,16 @@ export class MemoryStore {
     return this.sqlite.getFoldRepository().searchMemory(chatId, query, limit);
   }
 
+  saveChat(chat: ChatSummary): void {
+    this.sqlite.saveChat(chat);
+  }
+
   listChats(): ChatSummary[] {
     return this.sqlite.listChats();
+  }
+
+  getDataDir(): string {
+    return this.dataDir;
   }
 
   getChat(chatId: string): ChatSummary | undefined {
@@ -209,6 +217,42 @@ export class MemoryStore {
 
   getSendLedger() {
     return this.sqlite.getSendLedger();
+  }
+
+  deleteChat(chatId: string): boolean {
+    return this.sqlite.deleteChat(chatId);
+  }
+
+  clearChatMessages(chatId: string): boolean {
+    return this.sqlite.clearChatMessages(chatId);
+  }
+
+  clearAllChats() {
+    return this.sqlite.clearAllChats();
+  }
+
+  clearAllDrafts() {
+    return this.sqlite.clearAllDrafts();
+  }
+
+  clearAllMemories() {
+    return this.sqlite.clearAllMemories();
+  }
+
+  clearAllLearning() {
+    return this.sqlite.clearAllLearning();
+  }
+
+  getStorageStats() {
+    return this.sqlite.getStorageStats();
+  }
+
+  checkpointAndVacuum() {
+    this.sqlite.checkpointAndVacuum();
+  }
+
+  resetAll() {
+    return this.sqlite.resetAll();
   }
 
   close() {

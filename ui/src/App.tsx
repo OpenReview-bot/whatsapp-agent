@@ -293,6 +293,33 @@ export function App() {
       }).catch((err) => console.warn('Failed to refresh chats after new message:', err));
     });
 
+    eventSource.addEventListener('chat_deleted', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data) as { chatId?: string };
+        if (payload?.chatId) {
+          setChats((prev) => prev.filter((c) => c.id !== payload.chatId));
+          if (selectedChatIdRef.current === payload.chatId) {
+            setSelectedChatId(undefined);
+            setMessages([]);
+            setMobileView('list');
+          }
+        }
+      } catch {
+        // Ignore malformed SSE message
+      }
+    });
+
+    eventSource.addEventListener('messages_cleared', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data) as { chatId?: string };
+        if (payload?.chatId && selectedChatIdRef.current === payload.chatId) {
+          setMessages([]);
+        }
+      } catch {
+        // Ignore malformed SSE message
+      }
+    });
+
     return () => {
       window.clearTimeout(bootstrapTimer);
       eventSource.close();
@@ -331,6 +358,23 @@ export function App() {
   const handleApproveDraft = async (draftId: string, editedText?: string, asVoice?: boolean) => {
     await api.approveDraft(draftId, editedText, asVoice);
     setDrafts((prev) => prev.filter((d) => d.id !== draftId));
+  };
+
+  const handleDeleteChat = async (chatId: string) => {
+    await api.deleteChat(chatId);
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    if (selectedChatId === chatId) {
+      setSelectedChatId(undefined);
+      setMessages([]);
+      setMobileView('list');
+    }
+  };
+
+  const handleClearChatMessages = async (chatId: string) => {
+    await api.clearChatMessages(chatId);
+    if (selectedChatId === chatId) {
+      setMessages([]);
+    }
   };
 
   const handleRejectDraft = async (draftId: string) => {
@@ -486,7 +530,7 @@ export function App() {
           </button>
         </nav>
         <ChatList chats={chats} selectedChatId={selectedChatId} pendingDraftChatIds={pendingDraftChatIds} onSelectChat={selectChat} />
-        <ChatThread key={selectedChatId || 'empty'} chat={selectedChat} messages={messages} onSendMessage={handleSendMessage} onRetrySendIntent={handleRetrySendIntent} onSendReaction={handleSendReaction} onChangeMode={handleChangeMode} onBack={() => setMobileView('list')} onOpenInspector={() => openInspector('assistant')} />
+        <ChatThread key={selectedChatId || 'empty'} chat={selectedChat} messages={messages} onSendMessage={handleSendMessage} onRetrySendIntent={handleRetrySendIntent} onSendReaction={handleSendReaction} onChangeMode={handleChangeMode} onBack={() => setMobileView('list')} onOpenInspector={() => openInspector('assistant')} onDeleteChat={handleDeleteChat} onClearMessages={handleClearChatMessages} />
         <aside id="wa-agent-panel" className={'wa-agent-shell ' + (inspectorOpen ? 'is-open' : '')} aria-label={tr('لوحة المساعد الذكي', 'AI assistant panel')} aria-hidden={!inspectorVisible} inert={!inspectorVisible}>
           <button type="button" className="wa-inspector-close wa-icon-button" onClick={closeInspector} aria-label={tr('إغلاق لوحة المساعد', 'Close assistant panel')}><X size={20} /></button>
           <ModeratorDrawer key={(selectedChatId || 'none') + inspectorView} view={inspectorView} drafts={drafts} latestThought={latestThought} persona={persona} selectedChatId={selectedChatId} selectedChatMode={selectedChat?.agentMode} onSelectChat={selectChat} onApproveDraft={handleApproveDraft} onRejectDraft={handleRejectDraft} />
