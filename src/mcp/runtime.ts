@@ -28,15 +28,14 @@ export interface McpRuntime<C extends ManagedChannelClient> {
  */
 export async function createMcpRuntime<C extends ManagedChannelClient>(deps: McpRuntimeDeps<C>): Promise<McpRuntime<C>> {
   const mode = deps.channelMode ?? 'managed';
-  let holder: C | null = null;
   const channel = mode === 'managed'
     ? await startManagedChannel<C>({
-        createClient: (onState) => (holder = deps.createClient(onState)),
+        createClient: (onState) => deps.createClient(onState),
         connectTimeoutMs: deps.connectTimeoutMs,
         log: deps.log
       })
     : null;
-  const client = channel?.client ?? (holder = deps.createClient(() => {}));
+  const client = channel?.client ?? deps.createClient(() => {});
   const server = createWhatsAppMcpServer({
     memoryStore: deps.memoryStore,
     moderatorAgent: deps.moderatorAgent,

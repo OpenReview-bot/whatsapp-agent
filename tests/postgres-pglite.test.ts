@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { getMigrationStatements, migratePostgres, type PgClient } from '../src/persistence/postgres/migrate';
 import { PostgresLearningStore } from '../src/persistence/postgres/learning-store';
@@ -18,7 +17,6 @@ function bunSqlShim(db: PGlite) {
     return db.query(text, values).then((r) => r.rows);
   }) as never;
 }
-const m002 = () => readFileSync(new URL('../src/persistence/postgres/migrations/002_learning_memory.sql', import.meta.url), 'utf8');
 
 describe('PostgreSQL schema on a real Postgres engine (PGlite)', () => {
   const table = async (db: PGlite, name: string) =>

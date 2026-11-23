@@ -122,23 +122,8 @@ Limits of the standalone runner: it does not ingest new inbound messages or deli
 
 The standalone runner registers these 12 tools. `whatsapp_funnel_scatter_gather` is registered only when a funnel engine is passed to `createWhatsAppMcpServer`, which the standalone runner does not do.
 
-| Tool | Required parameters | Description |
+| Tool | Parameters | Description |
 |---|---|---|
-<<<<<<< HEAD
-| `whatsapp_list_chats` | none (`limit?`, `unreadOnly?`) | List recent chats, contact names, unread counts, and agent modes. |
-| `whatsapp_get_messages` | `chatId` (`limit?`) | Retrieve message history, timestamps, sender IDs, and voice note transcriptions. |
-| `whatsapp_search_chat_memory` | `chatId`, `query` | Search one chat in raw messages and summarized historical folds. |
-| `whatsapp_get_chat_folds` | `chatId` | List historical session and milestone fold summaries for one chat. |
-| `whatsapp_decompress_fold` | `chatId`, `foldId` | Inspect the raw messages behind a fold, optionally around one referenced message. |
-| `whatsapp_send_message` | `chatId`, `text` (`replyToMessageId?`, `mutationId?`) | Send a message through the durable send ledger with simulated typing cadence. Reuse the same `mutationId` when retrying so a retry cannot create a second send. |
-| `whatsapp_send_reaction` | `chatId`, `messageId`, `emoji` | Send an emoji reaction to a message. |
-| `whatsapp_get_status` | none | Inspect socket connection status, phone number, and pending drafts. |
-| `whatsapp_set_chat_mode` | `chatId`, `mode` (`autopilot`, `copilot`, `human`) | Set agent operation mode for a chat. |
-| `whatsapp_approve_draft` | `draftId` (`editedText?`) | Approve and dispatch a pending copilot draft. |
-| `whatsapp_manage_memory` | `chatId`, `action` (`content?`, `index?`) | Inspect, save, or delete long-term contact preferences with credential filtering. |
-| `whatsapp_set_chat_style` | `chatId`, `style` | Set tone: `professional`, `casual`, `playful`, `assertive`, or `empathetic`. |
-| `whatsapp_funnel_scatter_gather` (embedded only) | `method` (`payload?`, `queryParams?`) | Concurrent scatter-gather dispatch across external systems with circuit breaking. |
-=======
 | `whatsapp_list_chats` | `limit?: number, unreadOnly?: boolean` | List active conversations, contact names, unread message counts, and current agent modes. |
 | `whatsapp_get_messages` | `chatId: string, limit?: number` | Retrieve message history, timestamps, sender IDs, and voice note transcriptions. |
 | `whatsapp_send_message` | `chatId: string, text: string, replyToMessageId?: string, mutationId?: string` | Send a WhatsApp message with simulated human typing cadence. Reuse the same `mutationId` when retrying so the send is not duplicated. |
@@ -152,7 +137,6 @@ The standalone runner registers these 12 tools. `whatsapp_funnel_scatter_gather`
 | `whatsapp_get_chat_folds` | `chatId: string` | List historical session and milestone fold summaries for one chat. |
 | `whatsapp_decompress_fold` | `chatId: string, foldId: string, aroundMessageId?: string, offset?: number, limit?: number` | Inspect the raw messages behind a fold, or one message with two neighbors on each side. |
 | `whatsapp_funnel_scatter_gather` | `method: string, payload?: object, queryParams?: object, timeoutMs?: number` | Execute concurrent scatter-gather dispatch across external systems with circuit-breaking. Only registered when the funnel engine is configured. |
->>>>>>> pr-66
 
 ## Command-line interface
 
