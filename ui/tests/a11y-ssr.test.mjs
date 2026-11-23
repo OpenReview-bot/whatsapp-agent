@@ -22,7 +22,17 @@ const { PersonaSettingsPage } = await vite.ssrLoadModule('/src/components/Person
 
 const render = (language, component) =>
   renderToStaticMarkup(React.createElement(LocaleProvider, { initial: language }, component));
-const text = (html) => html.replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+// Test-only text extraction from our own SSR markup. Strip tags until stable so no
+// partial tag such as "<scr<b>ipt" can survive a single pass.
+const text = (html) => {
+  let out = html.replace(/<svg[\s\S]*?<\/svg>/g, '');
+  let previous;
+  do {
+    previous = out;
+    out = out.replace(/<[^>]*>/g, '');
+  } while (out !== previous);
+  return out.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+};
 
 function buttonByClass(html, cls) {
   const match = html.match(new RegExp(`<button[^>]*class="[^"]*${cls}[^"]*"[^>]*>([\\s\\S]*?)</button>`));
