@@ -1,13 +1,13 @@
 {
   "schemaVersion": 3,
-  "stateRevision": 141,
+  "stateRevision": 143,
   "workspaceId": "e6e371de2623bf032ba0feec",
   "phase": "complete",
   "currentSkill": null,
   "failureStreak": 0,
   "substantial": true,
-  "mutationGeneration": 24,
-  "verifiedGeneration": 24,
+  "mutationGeneration": 25,
+  "verifiedGeneration": 25,
   "activeCard": null,
   "lastDecision": null,
   "evidence": [
@@ -586,7 +586,19 @@
       "generation": 24,
       "timestamp": "2026-11-23T20:32:00.518Z",
       "workspaceId": "e6e371de2623bf032ba0feec"
+    },
+    {
+      "kind": "test",
+      "source": "bun test",
+      "result": "pass",
+      "detail": "main integration complete",
+      "repositoryRevision": "b730fe066a1fc554dce28e1e1bb1aef3192b734e",
+      "commandCategory": "test",
+      "scope": "workspace",
+      "generation": 25,
+      "timestamp": "2026-11-23T20:32:58.470Z",
+      "workspaceId": "e6e371de2623bf032ba0feec"
     }
   ],
-  "updatedAt": "2026-11-23T20:32:00.518Z"
+  "updatedAt": "2026-11-23T20:32:58.470Z"
 }
