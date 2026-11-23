@@ -3,7 +3,7 @@ import {BrandKnowledgeStore} from '../src/agent/brand-knowledge';
 import {ActionJournal,ToolRegistry} from '../src/agent/tools';
 import {AutonomousOperator} from '../src/agent/autonomous-operator';
 
-const ARABIC=/[\u0600-\u06FF]/;
+const ARABIC=/\p{Script=Arabic}/u;
 
 function setup(withInventory:boolean,scout?:unknown){
  const knowledge=new BrandKnowledgeStore({dbPath:':memory:'});
@@ -20,7 +20,7 @@ describe('reply language follows the customer language',()=>{
   const r=await operator.resolve({brandId:'brand',contactId:'c',text:'Do you have SKU-42 in stock and how much is it?'});
   expect(r.status).toBe('answered');
   expect(r.reply).toContain('SKU-42');
-  expect(r.reply).toContain('4');
+  expect(r.reply).toContain('has 4 in stock');
   expect(r.reply).toContain('120 SAR');
   expect(r.reply).not.toMatch(ARABIC);
   close();
@@ -28,7 +28,9 @@ describe('reply language follows the customer language',()=>{
  test('Arabic stock question still gets an Arabic answer',async()=>{
   const {operator,close}=setup(true);
   const r=await operator.resolve({brandId:'brand',contactId:'c',text:'هل SKU-42 موجود وبكام؟'});
+  expect(r.status).toBe('answered');
   expect(r.reply).toMatch(ARABIC);
+  expect(r.reply).toContain('SKU-42');
   expect(r.reply).toContain('120 SAR');
   close();
  });
@@ -36,6 +38,7 @@ describe('reply language follows the customer language',()=>{
   const {operator,close}=setup(false);
   const r=await operator.resolve({brandId:'brand',contactId:'c',text:'What is the price and stock?'});
   expect(r.status).toBe('clarification');
+  expect(r.reply).toMatch(/Could you tell me the product name or order number/);
   expect(r.reply).not.toMatch(ARABIC);
   close();
  });
@@ -43,6 +46,7 @@ describe('reply language follows the customer language',()=>{
   const {operator,close}=setup(false);
   const r=await operator.resolve({brandId:'brand',contactId:'c',text:'Is SKU-99 available?'});
   expect(r.status).toBe('clarification');
+  expect(r.reply).toMatch(/Could you confirm the product name or model/);
   expect(r.reply).not.toMatch(ARABIC);
   close();
  });
@@ -51,7 +55,23 @@ describe('reply language follows the customer language',()=>{
   const {operator,close}=setup(false,scout);
   const r=await operator.resolve({brandId:'brand',contactId:'c',text:'What are the latest transport news today?'});
   expect(r.status).toBe('answered');
-  expect(r.reply).toContain('https://example.test/a');
+  expect(r.reply).toContain('Sources: https://example.test/a');
+  expect(r.reply).not.toMatch(ARABIC);
+  close();
+ });
+ test('Arabic letters outside the basic Arabic block still count as Arabic',async()=>{
+  const {operator,close}=setup(false);
+  const r=await operator.resolve({brandId:'brand',contactId:'c',text:'\uFE8D\uFEDF\uFEDF\uFEE5\uFE8E\uFEB3 ?'});
+  expect(r.status).toBe('clarification');
+  expect(r.reply).toMatch(ARABIC);
+  close();
+ });
+ test('English question with no safe web sources gets an English clarification',async()=>{
+  const scout={search:async()=>({status:'insufficient_evidence',answer:'\u0645\u0627 \u0642\u062F\u0631\u062A\u0634 \u0623\u062A\u062D\u0642\u0642',sources:[]})};
+  const {operator,close}=setup(false,scout);
+  const r=await operator.resolve({brandId:'brand',contactId:'c',text:'What are the latest transport news today?'});
+  expect(r.status).toBe('clarification');
+  expect(r.reply).toMatch(/verify/i);
   expect(r.reply).not.toMatch(ARABIC);
   close();
  });

@@ -20,7 +20,7 @@ export class AutonomousOperator {
     });
     const evidence:Resolution['evidence']=[];
     // Reply in the customer's language: Arabic script anywhere means Arabic, otherwise English.
-    const ar=/[\u0600-\u06FF]/.test(input.text);
+    const ar=/\p{Script=Arabic}/u.test(input.text);
     const say=(arabic:string,english:string)=>ar?arabic:english;
     const finish=(status:Resolution['status'],reply:string):Resolution=>{
       this.deps.journal.updateWorkflow(input.brandId,workflowId,status==='answered'?'completed':status==='waiting_provider'?'waiting_provider':'needs_customer_detail');
@@ -65,7 +65,8 @@ export class AutonomousOperator {
           for(const source of publicInfo.sources)evidence.push({kind:'web',source:source.url,observedAt:source.observedAt});
           return finish('answered',publicInfo.answer+say('\nالمصادر: ','\nSources: ')+publicInfo.sources.map(s=>s.url).join(say('، ',', ')));
         }
-        return finish('clarification',publicInfo.answer);
+        // WebScout's fixed insufficient-evidence text is Arabic; render it in the customer's language.
+        return finish('clarification',say(publicInfo.answer,"I couldn't verify a reliable public source right now. I need to check an official source before I confirm."));
       }catch{return finish('clarification',say('ما قدرتش أتحقق من أحدث معلومة من مصدر خارجي دلوقتي.',"I couldn't verify the latest information from an outside source right now."));}
     }
     return finish('clarification',sku
