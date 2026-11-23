@@ -180,7 +180,7 @@ export class ReflectionWorker {
       const pg = this.persistenceStore as PostgresLearningStore | undefined;
       if (pg && typeof pg.getUnreflectedFeedback === 'function') {
         try {
-          const pgFeedback = await pg.getUnreflectedFeedback(chatId);
+          const pgFeedback = await pg.getUnreflectedFeedback(chatId, this.brandId);
           if (pgFeedback.length > 0) {
             feedback = [...feedback, ...pgFeedback];
           }
@@ -215,7 +215,7 @@ export class ReflectionWorker {
         });
 
         if (typeof pg.markFeedbackReflected === 'function') {
-          await pg.markFeedbackReflected(chatId).catch((err) => {
+          await pg.markFeedbackReflected(chatId, this.brandId).catch((err) => {
             console.warn('⚠️ [ReflectionWorker] markFeedbackReflected failed:', describeError(err));
           });
         }

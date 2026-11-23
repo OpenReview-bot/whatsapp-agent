@@ -9,12 +9,13 @@ export interface PgClient {
   close?(): Promise<void>;
 }
 
-const VERSION = 1;
+const VERSION = 2;
 const INITIAL_SQL = readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8');
+const LEARNING_SQL = readFileSync(new URL('./migrations/002_learning_memory.sql', import.meta.url), 'utf8');
 
-export function getMigrationStatements(): string[] {
+export function getMigrationStatements(sql: string = INITIAL_SQL): string[] {
   // The versioned DDL deliberately has no procedural blocks or embedded semicolons.
-  const withoutComments = INITIAL_SQL.split(/\r?\n/)
+  const withoutComments = sql.split(/\r?\n/)
     .filter(line => !line.trimStart().startsWith('--'))
     .join('\n');
   return withoutComments.split(/;\s*(?:\n|$)/).map(s => s.trim()).filter(Boolean);
@@ -37,11 +38,19 @@ export async function migratePostgres(client: PgClient): Promise<{ applied: bool
     if (versions.some(v => Number(v.version) > VERSION)) {
       throw new Error('Database schema is newer than this application');
     }
-    if (versions.some(v => Number(v.version) === VERSION)) {
-      return { applied: false, version: VERSION };
+    const has = (v: number) => versions.some(row => Number(row.version) === v);
+    let applied = false;
+    if (!has(1)) {
+      for (const stmt of statements.slice(3)) await tx.unsafe(stmt);
+      await tx.unsafe('INSERT INTO wa_agent.schema_migrations(version, applied_at) VALUES ($1, $2)', [1, Date.now()]);
+      applied = true;
     }
-    for (const stmt of statements.slice(3)) await tx.unsafe(stmt);
-    await tx.unsafe('INSERT INTO wa_agent.schema_migrations(version, applied_at) VALUES ($1, $2)', [VERSION, Date.now()]);
-    return { applied: true, version: VERSION };
+    // Version 2 adds the learning tables used by PostgresLearningStore.
+    if (!has(2)) {
+      for (const stmt of getMigrationStatements(LEARNING_SQL)) await tx.unsafe(stmt);
+      await tx.unsafe('INSERT INTO wa_agent.schema_migrations(version, applied_at) VALUES ($1, $2)', [2, Date.now()]);
+      applied = true;
+    }
+    return { applied, version: VERSION };
   });
 }
