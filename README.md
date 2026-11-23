@@ -34,6 +34,7 @@ New here? Follow the [Onboarding guide](docs/ONBOARDING.md) for first run, linki
 
 ```bash
 bun install
+(cd ui && bun install)
 bun run build
 ```
 
