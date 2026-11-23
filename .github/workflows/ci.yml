@@ -30,7 +30,7 @@ jobs:
           bun install
           cd ui && bun install
 
-      - name: Run Full Backend Test Pyramid (142 Tests)
+      - name: Run Backend Test Suite
         run: bun test
 
       - name: Run UI SSR Tests & Vite Production Build
