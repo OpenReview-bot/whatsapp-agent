@@ -21,6 +21,8 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
 
 ## Quick start
 
+New here? Follow the [Onboarding guide](docs/ONBOARDING.md) for first run, linking a number and choosing a reply mode.
+
 ### Prerequisites
 
 - [Bun](https://bun.sh) (v1.3.0 or later, matching `package.json`)
@@ -32,6 +34,7 @@ For an evidence-based breakdown of what is implemented, partial, and planned, se
 
 ```bash
 bun install
+(cd ui && bun install)
 bun run build
 ```
 
