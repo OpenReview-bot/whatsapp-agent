@@ -82,7 +82,7 @@ describe('Meta Cloud API outbound transport', () => {
     expect(sent).toEqual({ messageId: nativeId });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(`https://graph.facebook.com/v24.0/${phoneNumberId}/messages`);
-    expect((calls[0]?.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${config.accessToken}`);
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${config.accessToken}`);
     const json = JSON.parse(String(calls[0]?.init.body));
     expect(json).toEqual({
       messaging_product: 'whatsapp',

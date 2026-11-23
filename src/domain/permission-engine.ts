@@ -1,4 +1,4 @@
-import type { AgentDecision, AutonomyAction, PolicyConfig, PolicyRule } from './types';
+import type { AgentDecision, AutonomyAction, PolicyConfig } from './types';
 
 const AUTHORITY_RANK: Record<string, number> = {
   ignore: 0,
@@ -6,12 +6,6 @@ const AUTHORITY_RANK: Record<string, number> = {
   draft: 2,
   reply: 3,
   act: 4
-};
-
-const EFFECT_RANK: Record<string, number> = {
-  allow: 1,
-  require_approval: 2,
-  deny: 3
 };
 
 export interface PermissionEvaluationResult {

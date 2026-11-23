@@ -13,7 +13,7 @@ import makeWASocket, {
 import QRCode from 'qrcode';
 import pino from 'pino';
 import type { AudioTranscriber } from '../ai/audio-transcriber';
-import type { ChatMessage, ConnectionState, PairingState } from '../domain/types';
+import type { ChatMessage, PairingState } from '../domain/types';
 
 export interface WhatsAppReactionEvent {
   chatId: string;
@@ -299,7 +299,7 @@ export class WhatsAppSocketClient {
             if (parsed) {
               this.onMessageCallback?.(parsed, { historical: type !== "notify" });
             }
-          } catch (err) {
+          } catch {
             // Log message parsing error gracefully
           }
         }

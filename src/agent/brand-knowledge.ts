@@ -142,7 +142,7 @@ export class BrandKnowledgeStore {
       const score=wordScore*0.65+Math.max(semantic,0)*0.3+phrase*0.2+(row.authority==='official'?0.05:0);
       return {sourceId:row.source_id,versionId:row.version_id,text:row.content,location:row.location,authority:row.authority,lastChecked:row.last_checked,score,matched:matches>0 || semantic>=0.65};
     }).filter(hit=>hit.matched).sort((a,b)=>b.score-a.score);
-    const evidence=hits.slice(0,Math.max(1,Math.min(input.limit ?? 5,30))).map(({matched,...hit})=>hit as Evidence);
+    const evidence=hits.slice(0,Math.max(1,Math.min(input.limit ?? 5,30))).map(({matched:_matched,...hit})=>hit as Evidence);
     return {evidence,answerability:evidence.length ? 'supported':'insufficient',semanticEnabled:!!this.embed,lexicalIndex:'fts5'};
   }
 
