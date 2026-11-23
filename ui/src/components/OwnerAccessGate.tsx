@@ -101,7 +101,7 @@ export function OwnerAccessLogin({
           <div className="wa-owner-brand-footer">{tr('مستضاف عندك', 'Self-hosted')} · WhatsApp Agent</div>
         </aside>
         <section className="wa-owner-access-form-section" aria-labelledby="wa-owner-title">
-          <button type="button" className="wa-owner-language" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} aria-label={tr('غيّر اللغة', 'Switch language')}>
+          <button type="button" className="wa-owner-language" onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')} aria-label={(language === 'ar' ? 'EN' : 'عربي') + ': ' + tr('غيّر اللغة', 'Switch language')}>
             {language === 'ar' ? 'EN' : 'عربي'}
           </button>
           <div className="wa-owner-form-content">

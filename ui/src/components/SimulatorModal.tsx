@@ -63,7 +63,7 @@ export function SimulatorModal({ isOpen, onClose, onSimulate }: SimulatorModalPr
     <div className="wa-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       {/* react-doctor-disable-next-line react-doctor/prefer-html-dialog */}
       <section className="wa-modal wa-modal-medium" role="dialog" aria-modal="true" aria-labelledby="sim-title">
-        <header className="wa-modal-header">
+        <div className="wa-modal-header">
           <div className="wa-modal-heading">
             <span className="wa-modal-icon"><Bot size={20} /></span>
             <div>
@@ -72,7 +72,7 @@ export function SimulatorModal({ isOpen, onClose, onSimulate }: SimulatorModalPr
             </div>
           </div>
           <button type="button" className="wa-icon-button" onClick={onClose} aria-label={tr('إغلاق', 'Close')}><X size={20} /></button>
-        </header>
+        </div>
         <div className="wa-modal-content wa-sim-content">
           <p className="wa-sim-privacy"><ShieldCheck size={17} aria-hidden="true" /><span><strong>{tr('معاينة خاصة', 'Private preview')}</strong> {tr('مش بيبعت رسائل ولا بيحفظ محادثات', 'No messages are sent or saved')}</span></p>
           <label className="wa-field">

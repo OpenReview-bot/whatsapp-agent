@@ -140,7 +140,7 @@ button, input, textarea { -webkit-tap-highlight-color: transparent; }
 .wa-message.is-outbound .wa-bubble { background: var(--wa-outgoing); }
 .wa-bubble.is-highlighted { outline: 3px solid #53bfa2; outline-offset: 3px; }
 .wa-message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.85; unicode-bidi: plaintext; }
-.wa-message-meta { display: flex; align-items: center; justify-content: flex-end; gap: 5px; margin-top: 4px; color: #64757c; font-size: 11px; direction: ltr; font-variant-numeric: tabular-nums; }
+.wa-message-meta { display: flex; align-items: center; justify-content: flex-end; gap: 5px; margin-top: 4px; color: #566870; font-size: 11px; direction: ltr; font-variant-numeric: tabular-nums; }
 .wa-message-meta .is-read { color: #027eb5; }
 .wa-delivery-status { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding: 9px; border: 1px solid #cbded8; border-radius: 8px; background: #f0f7f4; color: #275d50; font-size: 12px; }
 .wa-delivery-status.is-uncertain, .wa-delivery-status.is-failed { border-color: #e5c78f; background: var(--wa-warn); color: var(--wa-warn-text); }

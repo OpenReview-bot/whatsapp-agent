@@ -94,7 +94,7 @@ export function StickerStudioModal({ isOpen, onClose, selectedChatId, onSendStic
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl p-6 text-slate-100 flex flex-col gap-5">
-        <header className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2">
             <Smile className="w-5 h-5 text-emerald-400" />
             <h2 className="text-lg font-semibold">{tr('استوديو ملصقات واتساب', 'WhatsApp Sticker Studio')}</h2>
@@ -106,7 +106,7 @@ export function StickerStudioModal({ isOpen, onClose, selectedChatId, onSendStic
           >
             <X className="w-5 h-5" />
           </button>
-        </header>
+        </div>
 
         {error && (
           <div className="flex items-center gap-2 p-3 rounded-lg bg-red-950/50 border border-red-800/60 text-red-300 text-sm">

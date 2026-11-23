@@ -388,7 +388,7 @@ export function ModeratorDrawer({
         {error && <p className="wa-inline-error" role="alert">{error}</p>}
         {persona && (
           <footer className="wa-agent-footer">
-            <ModelIcon model={persona.model} size={17} />
+            <span aria-hidden="true" style={{ display: 'contents' }}><ModelIcon model={persona.model} size={17} /></span>
             <Gemini.Color size={17} />
             <span dir="ltr">{persona.model}</span>
             <span>·</span>
