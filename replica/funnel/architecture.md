@@ -104,10 +104,12 @@ export interface FunnelReceipt {
 | Method | Path | Auth | Description | Flow |
 |:---|:---|:---|:---|:---|
 | `POST` | `/api/funnel/dispatch` | Bearer/API Key | Execute scatter-gather or hedged dispatch for a method | Agent/External |
-| `GET` | `/api/funnel/methods` | Public/Read | List registered funnel methods and targets | UI/Inspector |
+| `GET` | `/api/funnel/methods` | Public/Read | List registered funnel methods and targets (credentials redacted) | UI/Inspector |
 | `POST` | `/api/funnel/methods` | Admin Token | Register or update a funnel method | System Config |
 | `GET` | `/api/funnel/stats` | Public/Read | Live circuit breaker states and execution stats | Dashboard |
 | `POST` | `/api/funnel/circuit-breaker/reset` | Admin Token | Manually reset a tripped circuit breaker | Operator |
+
+> **Note on Credential Redaction**: Because `GET /api/funnel/methods` is an unauthenticated endpoint, target credentials are redacted in responses: `authHeader` is replaced with `hasAuthHeader: boolean`, and `headers` is replaced with `headerNames: string[]`.
 
 ---
 

@@ -641,7 +641,16 @@ export function createApiServer(deps: {
 
   // Funnel Engine Routes (Scatter-Gather & Hedged Dispatches)
   app.get('/api/funnel/methods', (c) => {
-    return c.json({ methods: funnelEngine.registry.listMethods() });
+    // Unauthenticated route: never expose per-target credentials.
+    const methods = funnelEngine.registry.listMethods().map((m) => ({
+      ...m,
+      targets: (m.targets ?? []).map(({ authHeader, headers, ...safe }) => ({
+        ...safe,
+        hasAuthHeader: Boolean(authHeader),
+        headerNames: Object.keys(headers ?? {})
+      }))
+    }));
+    return c.json({ methods });
   });
 
   app.post('/api/funnel/methods', async (c) => {
