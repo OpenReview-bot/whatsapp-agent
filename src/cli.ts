@@ -2,37 +2,47 @@ import { GeminiClient } from './ai/gemini-client';
 import { ModeratorAgent } from './ai/moderator-agent';
 import { MemoryStore } from './domain/memory-store';
 import { WhatsAppSocketClient } from './transport/whatsapp-socket';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { formatDoctorReport, runDoctor } from './doctor';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
 
 resolveRuntimeDatastore();
 
 const [command, ...args] = process.argv.slice(2);
 
-async function doctor() {
-  console.log('🔍 [Fable Agentic WhatsApp Doctor] Diagnosing environment...');
-  console.log(`✓ Runtime: Bun ${Bun.version}`);
-
-  // Check gcloud
-  try {
-    const project = (await Bun.$`gcloud config get-value project`.text()).trim();
-    const token = (await Bun.$`gcloud auth print-access-token`.text()).trim();
-    console.log(`✓ Google Cloud CLI: Authenticated`);
-    console.log(`  Active Project: ${project}`);
-    console.log(`  Access Credential: Valid (active)`);
-  } catch {
-    if (process.env.GEMINI_API_KEY) {
-      console.log('✓ Gemini API Key: Configured in environment');
-    } else {
-      console.log('⚠️ Google Cloud / Gemini: Neither gcloud ADC nor GEMINI_API_KEY detected');
+async function doctor(flags: string[]) {
+  console.log('🔍 [Fable Agentic WhatsApp Doctor] Diagnosing environment...\n');
+  const preflightOnly = flags.includes('--preflight');
+  // The app, `pair` and MCP all use ./data (DATA_DIR is not read anywhere), so probe the same place.
+  const dataDir = './data';
+  const report = await runDoctor({
+    bunVersion: Bun.version,
+    env: process.env,
+    openStorage: () => new MemoryStore().listChats().length,
+    uiBuilt: () => existsSync('./ui/dist/index.html'),
+    gcloudAuthenticated: async () => {
+      // Same path GeminiClient uses: active gcloud account token plus a project. Bounded so a stuck helper cannot hang the doctor.
+      const run = (args: string[]) => {
+        const proc = Bun.spawn(['gcloud', ...args], { stdout: 'pipe', stderr: 'pipe', timeout: 15_000, killSignal: 'SIGKILL' });
+        return Promise.all([new Response(proc.stdout as unknown as BodyInit).text(), proc.exited]);
+      };
+      const [token, tokenExit] = await run(['auth', 'print-access-token']);
+      if (tokenExit !== 0 || token.trim().length < 20) throw new Error('gcloud could not print an access token (or timed out)');
+      if (process.env.GOOGLE_CLOUD_PROJECT) return true;
+      const [project] = await run(['config', 'get-value', 'project']);
+      if (!project.trim()) throw new Error('no Google Cloud project is set');
+      return true;
+    },
+    sessionPaired: () => {
+      try {
+        const creds = JSON.parse(readFileSync(join(dataDir, 'session', 'creds.json'), 'utf8'));
+        return creds?.registered === true;
+      } catch { return false; }
     }
-  }
-
-  // Check data directory
-  const memoryStore = new MemoryStore();
-  const chats = memoryStore.listChats();
-  console.log(`✓ Local Storage: Operational (${chats.length} chats indexed)`);
-
-  console.log('\nAll core checks passed! System ready.');
+  }, { preflightOnly, strict: flags.includes('--strict') });
+  console.log(formatDoctorReport(report, { preflightOnly }));
+  process.exitCode = report.exitCode;
 }
 
 async function simulate(text: string) {
@@ -95,7 +105,7 @@ async function pair(phoneNumber?: string) {
 
 switch (command) {
   case 'doctor':
-    await doctor();
+    await doctor(args);
     break;
   case 'simulate':
     await simulate(args.join(' '));
@@ -107,7 +117,8 @@ switch (command) {
     console.log(`
 Fable Agentic WhatsApp CLI
 Usage:
-  bun run cli doctor                 Run environment diagnostic checks
+  bun run cli doctor [--preflight] [--strict]
+                                     Install preflight plus live readiness; exits 1 on any failure
   bun run cli simulate "<text>"      Test Gemini moderator response from CLI
   bun run cli pair [phone]           Initiate WhatsApp companion pairing
   bun run dev                        Start full web server + agent engine
