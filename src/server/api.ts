@@ -12,7 +12,8 @@ import { SendIntentService } from '../domain/send-intent-service';
 import type { ChatMessage } from '../domain/types';
 import type { WhatsAppSocketClient } from '../transport/whatsapp-socket';
 import type { SSEBroadcaster } from './sse';
-import { FableFunnelEngine, FunnelRegistry } from '../funnel';
+import type { FableFunnelEngine } from '../funnel';
+import { createDefaultFunnelEngine } from '../funnel/default-engine';
 import { registerDashboardAuth } from './dashboard-auth';
 import { UserMemoryManager } from '../domain/user-memory';
 import type { ConversationStyle } from '../ai/adaptive-style';
@@ -59,28 +60,7 @@ export function createApiServer(deps: {
       : undefined,
     publish: (event, data) => deps.sse.broadcast(event, data)
   });
-  const funnelEngine = deps.funnelEngine ?? new FableFunnelEngine({
-    registry: new FunnelRegistry({
-      initialMethods: [
-        {
-          method: 'INVENTORY_DISPATCH',
-          description: 'Scatter-gather stock lookup across warehouse systems',
-          mode: 'ALL_SETTLED',
-          timeoutMs: 2500,
-          targets: [
-            { id: 'internal-stock', name: 'Internal DB Inventory', url: 'http://127.0.0.1:3000/api/brand/stock', enabled: true }
-          ]
-        },
-        {
-          method: 'WEBHOOK_FANOUT',
-          description: 'Parallel webhook broadcast to CRM and analytics partners',
-          mode: 'ALL_SETTLED',
-          timeoutMs: 3000,
-          targets: []
-        }
-      ]
-    })
-  });
+  const funnelEngine = deps.funnelEngine ?? createDefaultFunnelEngine();
 
   // Only configured origins may issue browser mutations or read cross-origin API responses.
   // CLI/service callers without a browser Origin remain supported; bind the server to loopback by default.

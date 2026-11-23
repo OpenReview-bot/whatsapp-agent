@@ -23,7 +23,7 @@ import { WhatsAppSocketClient } from './transport/whatsapp-socket';
 import { MetaCloudApi, type MetaCloudApiConfig, type MetaCloudWebhookEvent } from './transport/meta-cloud-api';
 import { registerMetaCloudWebhookRoutes } from './server/meta-cloud-routes';
 import { ContactIdentityDirectory } from './identity/contact-directory';
-import { FableFunnelEngine, FunnelRegistry } from './funnel';
+import { createDefaultFunnelEngine } from './funnel/default-engine';
 import { DualMemoryManager } from './domain/learning-memory';
 import { ReflectionEngine } from './ai/reflection-engine';
 import { ReflectionWorker } from './agent/reflection-worker';
@@ -480,28 +480,7 @@ export async function createFableWhatsAppAgent(options: {
   }
 
   // Initialize Scatter-Gather Funnel Engine
-  const funnelEngine = new FableFunnelEngine({
-    registry: new FunnelRegistry({
-      initialMethods: [
-        {
-          method: 'INVENTORY_DISPATCH',
-          description: 'Scatter-gather stock lookup across warehouse systems',
-          mode: 'ALL_SETTLED',
-          timeoutMs: 2500,
-          targets: [
-            { id: 'internal-stock', name: 'Internal DB Inventory', url: 'http://127.0.0.1:3000/api/brand/stock', enabled: true }
-          ]
-        },
-        {
-          method: 'WEBHOOK_FANOUT',
-          description: 'Parallel webhook broadcast to CRM and analytics partners',
-          mode: 'ALL_SETTLED',
-          timeoutMs: 3000,
-          targets: []
-        }
-      ]
-    })
-  });
+  const funnelEngine = createDefaultFunnelEngine({ port });
 
   // Create API App
   const app = createApiServer({
