@@ -215,7 +215,7 @@ test('Models & providers is directly accessible with existing controls', () => {
 test('Only one assistant settings entry and collapsible inspector exist in the workspace', () => {
   const html = render('en', React.createElement(App));
   assert.equal((html.match(/aria-label="Assistant settings"/g) || []).length, 1);
-  assert.match(html, /aria-label="Collapse AI assistant"/);
+  assert.match(html, /aria-label="AI assistant, collapse panel"/);
   assert.match(html, /aria-controls="wa-agent-panel"/);
 });
 

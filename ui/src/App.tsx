@@ -440,8 +440,8 @@ export function App() {
             {signOutError && <span role="alert" className="wa-signout-error">{tr('تعذّر تسجيل الخروج', 'Could not sign out')}</span>}
             <OwnerSignOutButton onSignOut={handleSignOut} pending={signingOut} />
           </>}
-          {page === 'chats' && <button type="button" className="wa-header-agent-trigger" onClick={toggleInspector} aria-controls="wa-agent-panel" aria-expanded={inspectorVisible} aria-label={inspectorVisible ? tr('طي لوحة المساعد', 'Collapse AI assistant') : tr('فتح لوحة المساعد', 'Expand AI assistant')}>
-            <Gemini.Color size={18} /><span>{tr('المساعد الذكي', 'AI assistant')}</span>
+          {page === 'chats' && <button type="button" className="wa-header-agent-trigger" onClick={toggleInspector} aria-controls="wa-agent-panel" aria-expanded={inspectorVisible} aria-label={(drafts.length > 0 ? tr('المساعد الذكي ' + drafts.length, 'AI assistant ' + drafts.length) : tr('المساعد الذكي', 'AI assistant')) + ', ' + (inspectorVisible ? tr('طي اللوحة', 'collapse panel') : tr('فتح اللوحة', 'expand panel'))}>
+            <span aria-hidden="true" style={{display:"contents"}}><Gemini.Color size={18} /></span><span>{tr('المساعد الذكي', 'AI assistant')}</span>
             {drafts.length > 0 && <span className="wa-count wa-count-light"><AstryxBadge variant="teal" label={drafts.length} /></span>}
           </button>}
         </div>
