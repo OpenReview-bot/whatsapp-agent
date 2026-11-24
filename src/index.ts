@@ -246,8 +246,17 @@ export async function createFableWhatsAppAgent(options: {
         }
 
         // WA-005: the turn's durable jobs are done once the decision executed.
+        // A fail-closed rejection means the turn NEVER processed: release the
+        // job for a later retry instead of completing it, or the customer's
+        // message would be answered never (review triage on #97, comment 3).
+        const retryIntents = new Set(['turn_queue_expired', 'admission_full', 'planner_lane_busy']);
         for (const m of burst.messages) {
-          memoryStore.getInboundJobLedger().complete(InboundJobLedger.jobIdFor(m.chatId, m.id));
+          const jobId = InboundJobLedger.jobIdFor(m.chatId, m.id);
+          if (retryIntents.has(result.decision.intent ?? '')) {
+            memoryStore.getInboundJobLedger().failAttempt(jobId, result.decision.intent ?? 'queue_rejected');
+          } else {
+            memoryStore.getInboundJobLedger().complete(jobId);
+          }
         }
       } catch (err: any) {
         logEvent('error', 'agent_processing_error', { error: describeError(err) });
