@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { SqliteStore } from './db';
 
@@ -204,7 +205,7 @@ export class DualMemoryManager {
         this.notebookCache = this.parseNotebook(remote.content);
       }
       try {
-        writeFileSync(path, remote.content, 'utf-8');
+        this.atomicMirrorWrite(path, remote.content);
       } catch (err: unknown) {
         console.warn(`[DualMemoryManager] Could not mirror ${stateType} state to local file:`, err);
       }
@@ -588,13 +589,13 @@ export class DualMemoryManager {
       const remoteWb = await this.persistenceStore.getLearningState(this.brandId, 'workbook');
       if (remoteWb?.content) {
         this.workbookCache = this.parseWorkbook(remoteWb.content);
-        writeFileSync(this.workbookPath, remoteWb.content, 'utf-8');
+        this.atomicMirrorWrite(this.workbookPath, remoteWb.content);
       }
 
       const remoteNb = await this.persistenceStore.getLearningState(this.brandId, 'notebook');
       if (remoteNb?.content) {
         this.notebookCache = this.parseNotebook(remoteNb.content);
-        writeFileSync(this.notebookPath, remoteNb.content, 'utf-8');
+        this.atomicMirrorWrite(this.notebookPath, remoteNb.content);
       }
       return true;
     } catch (err: any) {
@@ -603,15 +604,25 @@ export class DualMemoryManager {
     }
   }
 
+  /**
+   * WA-008: atomic local mirror replacement. A crash or concurrent reader never sees a
+   * half-written mirror; the rename also removes the check-then-write race on the path.
+   */
+  private atomicMirrorWrite(path: string, content: string): void {
+    const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, content, "utf-8");
+    renameSync(tmp, path);
+  }
+
   private persistWorkbook(): void {
     const content = this.formatWorkbook(this.workbookCache);
-    writeFileSync(this.workbookPath, content, 'utf-8');
+    this.atomicMirrorWrite(this.workbookPath, content);
     this.schedulePersist('workbook', content);
   }
 
   private persistNotebook(): void {
     const content = this.formatNotebook(this.notebookCache);
-    writeFileSync(this.notebookPath, content, 'utf-8');
+    this.atomicMirrorWrite(this.notebookPath, content);
     this.schedulePersist('notebook', content);
   }
 
