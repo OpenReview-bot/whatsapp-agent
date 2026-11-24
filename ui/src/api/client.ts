@@ -2,10 +2,21 @@ import type { ChatMessage, ChatSummary, ModeratorPersona, PolicyConfig, SystemSt
 
 const BASE_URL = '/api';
 
+/** WA-026: HTTP failures carry their status so callers can classify them (401 vs 503 vs offline). */
+export class ApiError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function handleResponse<T>(res: Response, fallbackError: string): Promise<T> {
   if (!res.ok) {
     const errorBody = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
-    throw new Error(errorBody?.error || errorBody?.message || fallbackError);
+    throw new ApiError(errorBody?.error || errorBody?.message || fallbackError, res.status);
   }
   return res.json() as Promise<T>;
 }
