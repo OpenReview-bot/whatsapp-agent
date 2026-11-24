@@ -27,16 +27,22 @@ export interface ExecutionQueueOptions {
   timeoutMs?: number;
   /** Bound on distinct keys with unsettled work; excess admissions fail closed. */
   maxKeys?: number;
+  /** Bound on unsettled slots for ONE key (active owner plus queued waiters);
+   *  a stalled predecessor can otherwise grow its chain without limit. */
+  maxQueuedPerKey?: number;
 }
 
 export class ExecutionQueue {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly slotsPerKey = new Map<string, number>();
   private readonly timeoutMs: number;
   private readonly maxKeys: number | undefined;
+  private readonly maxQueuedPerKey: number | undefined;
 
   constructor(options: ExecutionQueueOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? 45_000;
     this.maxKeys = options.maxKeys;
+    this.maxQueuedPerKey = options.maxQueuedPerKey ?? 16;
   }
 
   /** Number of keys with unsettled work (including expired-but-chained slots). */
@@ -61,11 +67,20 @@ export class ExecutionQueue {
       );
     }
 
+    if (previous && this.maxQueuedPerKey !== undefined &&
+        (this.slotsPerKey.get(key) ?? 0) >= this.maxQueuedPerKey) {
+      throw new ConversationQueueError(
+        'admission_full',
+        'Per-chat execution queue bound reached; refusing new work'
+      );
+    }
+
     let releaseSlot!: () => void;
     const current = new Promise<void>((resolve) => {
       releaseSlot = resolve;
     });
     this.tails.set(key, current);
+    this.slotsPerKey.set(key, (this.slotsPerKey.get(key) ?? 0) + 1);
 
     let released = false;
     const release = () => {
@@ -73,6 +88,9 @@ export class ExecutionQueue {
       released = true;
       releaseSlot();
       if (this.tails.get(key) === current) this.tails.delete(key);
+      const remaining = (this.slotsPerKey.get(key) ?? 1) - 1;
+      if (remaining <= 0) this.slotsPerKey.delete(key);
+      else this.slotsPerKey.set(key, remaining);
     };
 
     if (!previous) return release;

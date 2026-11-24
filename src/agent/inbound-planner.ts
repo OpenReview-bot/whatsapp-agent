@@ -6,6 +6,7 @@ import type { ChatMessage } from '../domain/types';
 import type { ModeratorAgent } from '../ai/moderator-agent';
 import type { BoundedPlanner, PlannerGoal, PlannerOutcome } from './bounded-planner';
 import type { ToolRegistry } from './tools';
+import {ConversationQueueError} from './conversation-coordinator';
 
 type DecisionResult = Awaited<ReturnType<ModeratorAgent['processInboundMessage']>>;
 type Env = Readonly<Record<string,string|undefined>>;
@@ -99,8 +100,17 @@ export class InboundPlanner {
         allowWrites:policy.allowWrites,maxSteps:policy.maxSteps
       };
       outcome=await planner.run(goal);
-    }catch{
+    }catch(err){
       setState('failed_recoverable');
+      if(err instanceof ConversationQueueError){
+        // The planner lane for this contact is saturated: fail closed. A
+        // moderator fallback here would process the conversation next to the
+        // still-active planner predecessor (WA-002); the durable intake
+        // ledger (WA-005) re-drives the turn when the lane drains.
+        return {decision:{action:'ignore',intent:'planner_lane_busy',
+          reasoning:'Planner lane busy; turn rejected closed',confidence:1,
+          simulatedDelayMs:0},shouldSendImmediately:false};
+      }
       return null;
     }
 
