@@ -40,6 +40,32 @@ export function mapWhatsAppMessageStatus(status: number | null | undefined): Cha
   }
 }
 
+/**
+ * WA-014: every close reason lands in exactly one class. Terminal conditions (logged out,
+ * forbidden, replaced session) stop the lifecycle and request owner action; QR cycling is an
+ * expected pairing restart with its own budget; everything else is a transient network failure
+ * eligible for bounded retry. Never evade provider restrictions by retrying terminal codes.
+ */
+export type DisconnectClass = 'terminal' | 'qr_cycle' | 'transient';
+
+export function classifyDisconnect(statusCode: number | undefined): DisconnectClass {
+  if (statusCode === DisconnectReason.loggedOut || // 401
+      statusCode === DisconnectReason.forbidden || // 403
+      statusCode === 440) {                        // connectionReplaced
+    return 'terminal';
+  }
+  if (statusCode === DisconnectReason.timedOut ||     // 408
+      statusCode === DisconnectReason.restartRequired || // 515
+      statusCode === 500) {
+    return 'qr_cycle';
+  }
+  return 'transient';
+}
+
+/** WA-014: bounded retry lifecycle budgets. */
+export const MAX_RECONNECT_ATTEMPTS = 8;
+export const MAX_QR_CYCLES = 20;
+
 export interface WhatsAppSocketOptions {
   sessionDir?: string;
   audioTranscriber?: AudioTranscriber;
@@ -47,6 +73,11 @@ export interface WhatsAppSocketOptions {
   onMessage?: (message: ChatMessage, metadata?: { historical: boolean }) => void;
   onReaction?: (reaction: WhatsAppReactionEvent) => void;
   onMessageStatus?: (event: WhatsAppMessageStatusEvent) => void;
+  /** WA-013/WA-014 test seams; production defaults preserve the current Baileys wiring. */
+  socketFactory?: (config: Record<string, unknown>) => WASocket;
+  authStateFactory?: (sessionDir: string) => Promise<{ state: any; saveCreds: () => Promise<void> }>;
+  versionProvider?: () => Promise<{ version: [number, number, number] }>;
+  reconnectDelays?: { baseMs: number; maxMs: number };
 }
 
 export class WhatsAppSocketClient {
@@ -70,6 +101,14 @@ export class WhatsAppSocketClient {
   private reconnectAttempts = 0;
   private pairingCodeRequestedNumber: string | null = null;
   private startMutex: Promise<void> = Promise.resolve();
+  // WA-013: every lifecycle transition bumps the generation; callbacks from retired
+  // generations fence themselves before mutating state.
+  private socketGeneration = 0;
+  private qrCycleCount = 0;
+  private readonly socketFactory: (config: Record<string, unknown>) => WASocket;
+  private readonly authStateFactory: (sessionDir: string) => Promise<{ state: any; saveCreds: () => Promise<void> }>;
+  private readonly versionProvider: () => Promise<{ version: [number, number, number] }>;
+  private readonly reconnectDelays: { baseMs: number; maxMs: number };
 
   constructor(options: WhatsAppSocketOptions = {}) {
     this.sessionDir = options.sessionDir ?? './data/session';
@@ -78,6 +117,10 @@ export class WhatsAppSocketClient {
     this.onMessageCallback = options.onMessage;
     this.onReactionCallback = options.onReaction;
     this.onMessageStatusCallback = options.onMessageStatus;
+    this.socketFactory = options.socketFactory ?? ((config) => makeWASocket(config as any));
+    this.authStateFactory = options.authStateFactory ?? ((dir) => useMultiFileAuthState(dir));
+    this.versionProvider = options.versionProvider ?? (() => fetchLatestBaileysVersion());
+    this.reconnectDelays = options.reconnectDelays ?? { baseMs: 500, maxMs: 15_000 };
   }
 
   getState(): PairingState {
@@ -123,7 +166,13 @@ export class WhatsAppSocketClient {
   /**
    * Initializes and starts the WhatsApp socket connection with serialization mutex
    */
-  async start(pairingPhoneNumber?: string, options?: { refresh?: boolean }): Promise<void> {
+  async start(pairingPhoneNumber?: string, options?: { refresh?: boolean; viaReconnect?: boolean }): Promise<void> {
+    // A deliberate start (UI, pairing request) is a new pairing epoch: retry budgets reset.
+    // Timer-driven restarts keep counting so WA-014's bounded budget can actually exhaust.
+    if (!options?.viaReconnect) {
+      this.reconnectAttempts = 0;
+      this.qrCycleCount = 0;
+    }
     const priorMutex = this.startMutex;
     let releaseMutex!: () => void;
     this.startMutex = new Promise<void>((resolve) => { releaseMutex = resolve; });
@@ -139,6 +188,7 @@ export class WhatsAppSocketClient {
   }
 
   private async internalStart(pairingPhoneNumber?: string, options?: { refresh?: boolean }): Promise<void> {
+    const generation = ++this.socketGeneration;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -166,6 +216,7 @@ export class WhatsAppSocketClient {
         this.sock.ev.removeAllListeners('messages.upsert');
         this.sock.ev.removeAllListeners('messages.update');
         this.sock.ev.removeAllListeners('message-receipt.update');
+        this.sock.ev.removeAllListeners('messaging-history.set');
         this.sock.end(undefined);
       } catch (err) {
         console.warn('[WhatsApp] Error during socket listener cleanup:', err);
@@ -177,24 +228,29 @@ export class WhatsAppSocketClient {
     this.setState({ state: 'connecting', error: undefined });
 
     try {
-      let { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
+      let { state, saveCreds } = await this.authStateFactory(this.sessionDir);
 
       // Self-heal: If auth credentials have `me` set but are unregistered (or corrupted from prior logout),
       // Baileys will neither generate a QR code nor connect. Wipe the dead session and re-initialize.
       if (state.creds?.me && !state.creds?.registered) {
         console.warn('[WhatsApp] Detected stale unregistered credentials with me populated. Auto-flushing session...');
         this.clearSession();
-        const freshAuth = await useMultiFileAuthState(this.sessionDir);
+        const freshAuth = await this.authStateFactory(this.sessionDir);
         state = freshAuth.state;
         saveCreds = freshAuth.saveCreds;
       }
 
+      // WA-013: a disconnect() or a newer start() that landed during the auth await
+      // owns the lifecycle now; this older attempt must stop before touching the socket.
+      if (generation !== this.socketGeneration) return;
+
       this.authState = state;
-      const { version } = await fetchLatestBaileysVersion();
+      const { version } = await this.versionProvider();
+      if (generation !== this.socketGeneration) return;
 
       const logger = pino({ level: 'silent' });
 
-      this.sock = makeWASocket({
+      const sock = this.socketFactory({
         version,
         auth: state,
         logger,
@@ -205,10 +261,17 @@ export class WhatsAppSocketClient {
         connectTimeoutMs: 60_000,
         defaultQueryTimeoutMs: 60_000
       });
+      if (generation !== this.socketGeneration) return;
+      this.sock = sock;
 
-      this.sock.ev.on('creds.update', saveCreds);
+      // WA-013: credential writes flush only while this socket generation is current.
+      this.sock.ev.on('creds.update', () => {
+        if (generation !== this.socketGeneration) return;
+        void saveCreds();
+      });
 
       this.sock.ev.on('connection.update', async (update) => {
+        if (generation !== this.socketGeneration) return;
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -217,6 +280,7 @@ export class WhatsAppSocketClient {
           if (socket && this.pairingCodeRequestedNumber && !socket.authState?.creds?.registered) {
             try {
               const code = await socket.requestPairingCode(this.pairingCodeRequestedNumber);
+              if (generation !== this.socketGeneration || this.sock !== socket) return;
               this.setState({
                 state: 'pairing_code_ready',
                 pairingCode: code,
@@ -229,6 +293,7 @@ export class WhatsAppSocketClient {
           } else {
             try {
               const dataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 6 });
+              if (generation !== this.socketGeneration || this.sock !== socket) return;
               this.setState({
                 state: 'qr_ready',
                 qrDataUrl: dataUrl,
@@ -247,6 +312,7 @@ export class WhatsAppSocketClient {
             this.reconnectTimer = null;
           }
           this.reconnectAttempts = 0;
+          this.qrCycleCount = 0;
           this.isConnecting = false;
           const user = this.sock?.user;
           this.setState({
@@ -277,46 +343,57 @@ export class WhatsAppSocketClient {
           }
 
           const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          const kind = classifyDisconnect(statusCode);
 
+          // WA-014: terminal codes never auto-retry - evading provider restrictions is not allowed.
           if (statusCode === DisconnectReason.loggedOut) {
             this.clearSession();
             this.setState({
               state: 'disconnected',
               error: 'Session logged out. Please re-pair your WhatsApp device.'
             });
-          } else if (shouldReconnect) {
-            this.reconnectAttempts++;
-            // During QR pairing, 408 (timeout), 500, and 515 are routine cycling events
-            const isQRCycle = statusCode === 408 || statusCode === 500 || statusCode === 515;
-            const maxBackoff = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 15000);
-            const backoff = isQRCycle ? 1500 : Math.floor(500 + Math.random() * (maxBackoff - 500));
-
-            if (!isQRCycle) {
-              this.setState({
-                state: 'connecting',
-                error: `Connection lost. Reconnecting in ${Math.round(backoff / 1000)}s...`
-              });
-            } else {
-              this.setState({
-                state: 'connecting',
-                error: undefined
-              });
-            }
-
-            if (this.reconnectTimer) {
-              clearTimeout(this.reconnectTimer);
-            }
-            this.reconnectTimer = setTimeout(() => {
-              this.reconnectTimer = null;
-              void this.start(this.pairingCodeRequestedNumber || undefined);
-            }, backoff);
-          } else {
+            return;
+          }
+          if (kind === 'terminal') {
             this.setState({
               state: 'failed',
-              error: `Connection terminated: ${lastDisconnect?.error?.message || statusCode}`
+              error: `Connection terminated (${statusCode ?? 'unknown'}). Owner action required: review the session and reconnect manually.`
             });
+            return;
           }
+
+          if (kind === 'qr_cycle') {
+            // During QR pairing, 408 (timeout), 500, and 515 are routine cycling events.
+            this.qrCycleCount++;
+            if (this.qrCycleCount > MAX_QR_CYCLES) {
+              this.setState({
+                state: 'failed',
+                error: `Pairing did not complete: QR restart budget exhausted after ${MAX_QR_CYCLES} cycles. Owner action required to pair again.`
+              });
+              return;
+            }
+            this.setState({ state: 'connecting', error: undefined });
+            this.scheduleReconnect(generation, this.reconnectDelays.baseMs * 3);
+            return;
+          }
+
+          // transient: bounded retry with exponential backoff
+          this.reconnectAttempts++;
+          if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            this.setState({
+              state: 'failed',
+              error: `Reconnect budget exhausted after ${MAX_RECONNECT_ATTEMPTS} attempts (last disconnect code ${statusCode ?? 'unknown'}). Owner action required.`
+            });
+            return;
+          }
+          const { baseMs, maxMs } = this.reconnectDelays;
+          const maxBackoff = Math.min(baseMs * 2 * Math.pow(1.5, this.reconnectAttempts), maxMs);
+          const backoff = Math.floor(baseMs + Math.random() * Math.max(1, maxBackoff - baseMs));
+          this.setState({
+            state: 'connecting',
+            error: `Connection lost. Reconnecting in ${Math.max(1, Math.round(backoff / 1000))}s...`
+          });
+          this.scheduleReconnect(generation, backoff);
         }
       });
 
@@ -328,6 +405,7 @@ export class WhatsAppSocketClient {
       };
 
       this.sock.ev.on('messages.update', (updates) => {
+        if (generation !== this.socketGeneration) return;
         for (const { key, update } of updates) {
           if (!key.id || !key.remoteJid || key.fromMe === false) continue;
           const status = mapWhatsAppMessageStatus(update.status);
@@ -337,6 +415,7 @@ export class WhatsAppSocketClient {
 
       // Participant receipts do not establish group-wide delivery or read state.
       this.sock.ev.on('message-receipt.update', (receipts) => {
+        if (generation !== this.socketGeneration) return;
         for (const { key, receipt } of receipts) {
           if (!key.id || !key.remoteJid || key.fromMe === false || key.remoteJid.endsWith('@g.us')) continue;
           const status = receipt.readTimestamp ? 'read' : receipt.receiptTimestamp ? 'delivered' : undefined;
@@ -346,6 +425,7 @@ export class WhatsAppSocketClient {
 
       // Handle incoming & synced messages (both real-time 'notify' and background 'append')
       this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (generation !== this.socketGeneration) return;
         for (const raw of messages) {
           if (!raw.message) continue;
           // Ignore status broadcasts
@@ -373,6 +453,7 @@ export class WhatsAppSocketClient {
 
       // Handle continuous history harvest synced from phone
       this.sock.ev.on('messaging-history.set', async ({ messages: historyMessages }) => {
+        if (generation !== this.socketGeneration) return;
         if (!historyMessages || !Array.isArray(historyMessages)) return;
         for (const raw of historyMessages) {
           if (!raw.message) continue;
@@ -400,6 +481,21 @@ export class WhatsAppSocketClient {
       this.isConnecting = false;
       this.setState({ state: 'failed', error: err.message });
     }
+  }
+
+  /**
+   * WA-013/WA-014: schedules a restart owned by the socket generation that closed. If the
+   * generation moved on (disconnect() or a manual start() landed first), the timer is inert.
+   */
+  private scheduleReconnect(generation: number, delayMs: number): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (generation !== this.socketGeneration) return;
+      void this.start(this.pairingCodeRequestedNumber || undefined, { viaReconnect: true });
+    }, delayMs);
   }
 
   /**
@@ -614,6 +710,24 @@ export class WhatsAppSocketClient {
     };
   }
 
+  private notConnectedError(): Error & { code: string } {
+    const error = new Error('WhatsApp socket is not connected') as Error & { code: string };
+    error.code = 'WHATSAPP_NOT_CONNECTED';
+    return error;
+  }
+
+  /**
+   * WA-013: a send must stay bound to the socket generation that accepted it. If the socket
+   * was swapped or torn down mid-flight (stale generation), fail instead of writing through
+   * a socket that no longer owns the pairing.
+   */
+  private assertCurrentSocket(socketAtEntry: WASocket | null, generationAtEntry: number): WASocket {
+    if (!socketAtEntry || this.sock !== socketAtEntry || this.socketGeneration !== generationAtEntry) {
+      throw this.notConnectedError();
+    }
+    return socketAtEntry;
+  }
+
   /**
    * Sends a message to a WhatsApp chat with optional realistic typing delay
    */
@@ -622,17 +736,14 @@ export class WhatsAppSocketClient {
     text: string,
     options: { replyToMessageId?: string; simulatedDelayMs?: number } = {}
   ): Promise<{ messageId: string }> {
-    if (!this.sock) {
-      const error = new Error('WhatsApp socket is not connected') as Error & { code: string };
-      error.code = 'WHATSAPP_NOT_CONNECTED';
-      throw error;
-    }
+    const generationAtEntry = this.socketGeneration;
+    const socketAtEntry = this.assertCurrentSocket(this.sock, generationAtEntry);
 
     const targetJid = this.transportJids.get(chatId) || chatId;
 
     // Emit composing presence indicator
     try {
-      await this.sock.sendPresenceUpdate('composing', targetJid);
+      await socketAtEntry.sendPresenceUpdate('composing', targetJid);
     } catch (err) {
       console.warn('[WhatsApp] Failed to send composing presence update:', err);
     }
@@ -641,8 +752,11 @@ export class WhatsAppSocketClient {
       await new Promise((resolve) => setTimeout(resolve, options.simulatedDelayMs));
     }
 
+    // WA-013: re-check after the delay - the socket may have been replaced or disconnected meanwhile
+    this.assertCurrentSocket(socketAtEntry, generationAtEntry);
+
     try {
-      await this.sock.sendPresenceUpdate('paused', targetJid);
+      await socketAtEntry.sendPresenceUpdate('paused', targetJid);
     } catch (err) {
       console.warn('[WhatsApp] Failed to send paused presence update:', err);
     }
@@ -656,7 +770,7 @@ export class WhatsAppSocketClient {
       }
     }
 
-    const sent = await this.sock.sendMessage(targetJid, { text }, quoted ? { quoted } : undefined);
+    const sent = await socketAtEntry.sendMessage(targetJid, { text }, quoted ? { quoted } : undefined);
 
     const messageId = sent?.key?.id;
     if (!messageId) {
@@ -676,17 +790,14 @@ export class WhatsAppSocketClient {
     audioBuffer: Buffer | Uint8Array,
     options: { replyToMessageId?: string; simulatedRecordingDurationMs?: number } = {}
   ): Promise<{ messageId: string }> {
-    if (!this.sock) {
-      const error = new Error('WhatsApp socket is not connected') as Error & { code: string };
-      error.code = 'WHATSAPP_NOT_CONNECTED';
-      throw error;
-    }
+    const generationAtEntry = this.socketGeneration;
+    const socketAtEntry = this.assertCurrentSocket(this.sock, generationAtEntry);
 
     const targetJid = this.transportJids.get(chatId) || chatId;
 
     // Emit recording audio presence indicator
     try {
-      await this.sock.sendPresenceUpdate('recording', targetJid);
+      await socketAtEntry.sendPresenceUpdate('recording', targetJid);
     } catch (err) {
       console.warn('[WhatsApp] Failed to send recording presence update:', err);
     }
@@ -696,8 +807,11 @@ export class WhatsAppSocketClient {
       await new Promise((resolve) => setTimeout(resolve, recordingDelay));
     }
 
+    // WA-013: re-check after the recording delay
+    this.assertCurrentSocket(socketAtEntry, generationAtEntry);
+
     try {
-      await this.sock.sendPresenceUpdate('paused', targetJid);
+      await socketAtEntry.sendPresenceUpdate('paused', targetJid);
     } catch (err) {
       console.warn('[WhatsApp] Failed to send paused presence update:', err);
     }
@@ -713,7 +827,7 @@ export class WhatsAppSocketClient {
 
     const buf = Buffer.isBuffer(audioBuffer) ? audioBuffer : Buffer.from(audioBuffer);
 
-    const sent = await this.sock.sendMessage(
+    const sent = await socketAtEntry.sendMessage(
       targetJid,
       {
         audio: buf,
@@ -796,6 +910,12 @@ export class WhatsAppSocketClient {
    * Disconnects the socket
    */
   async disconnect(clearSession: boolean = false): Promise<void> {
+    // WA-013: fence first - every listener, timer and in-flight start() checkpoint is
+    // generation-guarded, so an explicit disconnect wins even while startup is blocked
+    // on a network await. Teardown then runs without waiting on the lifecycle mutex:
+    // internalStart() re-checks the generation after every await, so it can never
+    // assign or rewire a socket after this fence lands.
+    this.socketGeneration++;
     this.isExplicitlyClosed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -809,6 +929,7 @@ export class WhatsAppSocketClient {
         this.sock.ev.removeAllListeners('messages.upsert');
         this.sock.ev.removeAllListeners('messages.update');
         this.sock.ev.removeAllListeners('message-receipt.update');
+        this.sock.ev.removeAllListeners('messaging-history.set');
         this.sock.end(undefined);
       } catch (err) {
         console.warn('[WhatsApp] Error during socket disconnect:', err);
