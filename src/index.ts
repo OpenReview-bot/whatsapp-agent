@@ -29,6 +29,7 @@ import { DualMemoryManager } from './domain/learning-memory';
 import { ReflectionEngine } from './ai/reflection-engine';
 import { ReflectionWorker } from './agent/reflection-worker';
 import { PostgresLearningStore } from './persistence/postgres/learning-store';
+import { resolveLearningMirror } from './persistence/learning-mirror-config';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
 import { join } from 'node:path';
 import { describeBurst, describeError, hashChatId, logEvent } from './observability/safe-log';
@@ -87,12 +88,20 @@ export async function createFableWhatsAppAgent(options: {
 
   const messageSplitter = new MessageSplitter();
 
+  // WA-009: the Postgres learning mirror activates only through the explicit resolver.
+  // SQLite stays authoritative; a mirror construction failure is degraded, never silent.
+  const mirrorResolution = resolveLearningMirror();
+  const learningMirror: { enabled: boolean; reason: string; degraded?: string } = {
+    enabled: mirrorResolution.mode === 'mirror',
+    reason: mirrorResolution.reason
+  };
   let postgresLearningStore: PostgresLearningStore | undefined;
-  if (process.env.DATABASE_URL) {
+  if (mirrorResolution.mode === 'mirror') {
     try {
-      postgresLearningStore = new PostgresLearningStore({ databaseUrl: process.env.DATABASE_URL });
+      postgresLearningStore = new PostgresLearningStore({ databaseUrl: mirrorResolution.databaseUrl! });
     } catch (err: any) {
-      console.warn('⚠️ [Fable Agentic WhatsApp] Failed to initialize PostgresLearningStore:', describeError(err));
+      learningMirror.degraded = err instanceof Error ? err.message : String(err);
+      console.warn('⚠️ [Fable Agentic WhatsApp] Learning mirror degraded:', learningMirror.degraded);
     }
   }
 
@@ -587,7 +596,7 @@ export async function createFableWhatsAppAgent(options: {
   const shutdown = async () => {
     if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
     clearInterval(inboundRecoveryTimer);
-    reflectionWorker.stopPeriodicSweep();
+    await reflectionWorker.stopPeriodicSweep();
     proactiveAbort?.abort();
     // WA-008: drain and retry outstanding learning-state writes before closing stores.
     await dualMemoryManager.flushPendingWrites();
@@ -607,9 +616,9 @@ export async function createFableWhatsAppAgent(options: {
     capabilities.followups.close();
   };
 
-  const unregSchedulers = defaultLifecycle.register('schedulers', 'stop_ingestion', () => {
+  const unregSchedulers = defaultLifecycle.register('schedulers', 'stop_ingestion', async () => {
     if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
-    reflectionWorker.stopPeriodicSweep();
+    await reflectionWorker.stopPeriodicSweep();
     proactiveAbort?.abort();
   });
   const unregBurst = defaultLifecycle.register('burst_queue', 'drain_queues', async () => {
@@ -636,6 +645,7 @@ export async function createFableWhatsAppAgent(options: {
   return {
     app,
     port,
+    learningMirror,
     memoryStore,
     whatsappClient,
     metaClient,
