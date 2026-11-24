@@ -42,9 +42,12 @@ describe('Production Hardening & Reliability Regressions', () => {
     ]);
   });
 
-  it('ConversationCoordinator > enforces execution timeout and releases lock', async () => {
+  // WA-002: the old oracle here expected a queued task to proceed while its
+  // predecessor was still active, encoding the queue-serialization defect.
+  // The real invariant: expired queued work is rejected and never executes.
+  it('ConversationCoordinator > rejects expired queued work instead of breaking serialization', async () => {
     const coordinator = new ConversationCoordinator({ timeoutMs: 50 });
-    let unblockedSecond = false;
+    let secondRan = false;
 
     // Run first task that artificially delays past the timeout
     const firstTask = coordinator.run('brand_test', 'user_1', async () => {
@@ -52,16 +55,18 @@ describe('Production Hardening & Reliability Regressions', () => {
       return 'first';
     });
 
-    // Run second task on the same user; queue wait should time out within ~50ms and proceed
+    // The queued task's wait expires while the first is still active: it must
+    // be rejected, never executed next to its predecessor.
     const secondTask = coordinator.run('brand_test', 'user_1', async () => {
-      unblockedSecond = true;
+      secondRan = true;
       return 'second';
     });
 
-    const secondResult = await secondTask;
-    expect(unblockedSecond).toBe(true);
-    expect(secondResult).toBe('second');
-    await firstTask;
+    await expect(secondTask).rejects.toThrow(/timeout|expired/i);
+    expect(secondRan).toBe(false);
+    await expect(firstTask).resolves.toBe('first');
+    // The queue recovers once the predecessor settles.
+    await expect(coordinator.run('brand_test', 'user_1', async () => 'third')).resolves.toBe('third');
   });
 
   it('AgentTurnCoordinator > fails closed on timeout instead of hanging conversation', async () => {
@@ -92,7 +97,8 @@ describe('Production Hardening & Reliability Regressions', () => {
     };
 
     const result = await coordinator.processInboundMessage(msg);
-    expect(result.decision.action).toBe('draft');
+    // WA-001: a timed-out result must not masquerade as a persisted draft.
+    expect(result.decision.action).toBe('ignore');
     expect(result.decision.intent).toBe('processing_timeout');
     expect(result.shouldSendImmediately).toBe(false);
   });

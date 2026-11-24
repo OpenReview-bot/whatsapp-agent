@@ -219,6 +219,14 @@ export class MemoryStore {
     return this.sqlite.getSendLedger();
   }
 
+  getInboundJobLedger() {
+    return this.sqlite.getInboundJobLedger();
+  }
+
+  saveInboundMessageWithJob(msg: ChatMessage, options: { createJob: boolean }) {
+    return this.sqlite.saveInboundMessageWithJob(msg, options);
+  }
+
   deleteChat(chatId: string): boolean {
     return this.sqlite.deleteChat(chatId);
   }

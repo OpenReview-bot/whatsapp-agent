@@ -59,6 +59,8 @@ export interface SendTemplateIntentInput extends SendIntentInput {
 export interface SendIntent extends SendIntentInput {
   id: string;
   payloadHash: string;
+  batchId?: string;
+  batchOrdinal?: number;
   state: SendIntentState;
   nativeMessageId?: string;
   attemptCount: number;
@@ -181,7 +183,14 @@ export class SendLedger {
     if (!columns.some((column) => column.name === 'parent_intent_id')) {
       this.db.run('ALTER TABLE send_intents ADD COLUMN parent_intent_id TEXT');
     }
+    if (!columns.some((column) => column.name === 'batch_id')) {
+      this.db.run('ALTER TABLE send_intents ADD COLUMN batch_id TEXT');
+    }
+    if (!columns.some((column) => column.name === 'batch_ordinal')) {
+      this.db.run('ALTER TABLE send_intents ADD COLUMN batch_ordinal INTEGER');
+    }
     this.db.run('CREATE INDEX IF NOT EXISTS idx_send_intents_due ON send_intents(state, next_attempt_at)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_send_intents_batch ON send_intents(batch_id, batch_ordinal)');
     this.db.run('CREATE INDEX IF NOT EXISTS idx_send_intents_native ON send_intents(chat_id, native_message_id)');
     this.db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_send_intents_retry_parent ON send_intents(parent_intent_id) WHERE parent_intent_id IS NOT NULL');
     this.db.run(`
@@ -238,6 +247,8 @@ export class SendLedger {
       sourceId: row.source_id,
       sourceRevision: row.source_revision,
       parentIntentId: row.parent_intent_id ?? undefined,
+      batchId: row.batch_id ?? undefined,
+      batchOrdinal: row.batch_ordinal ?? undefined,
       actionKind: row.action_kind,
       chatId: row.chat_id,
       text: data.text,
@@ -271,7 +282,7 @@ export class SendLedger {
     return row ? this.rowToIntent(row) : undefined;
   }
 
-  private insertIntent(input: SendIntentInput, now: number): SendIntent {
+  private insertIntent(input: SendIntentInput, now: number, batch?: { batchId: string; batchOrdinal: number }): SendIntent {
     const existing = this.getBySource(input);
     if (existing) {
       if (existing.payloadHash !== payloadHash(input)) throw new SendIntentConflictError();
@@ -299,8 +310,8 @@ export class SendLedger {
       INSERT INTO send_intents (
         id, source_kind, source_id, source_revision, parent_intent_id, action_kind, chat_id,
         payload_hash, payload_json, policy_revision, state, next_attempt_at,
-        created_at, updated_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
+        created_at, updated_at, expires_at, batch_id, batch_ordinal
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?)
     `).run(
       id, input.sourceKind, input.sourceId, input.sourceRevision, input.parentIntentId ?? null, input.actionKind,
       input.chatId, payloadHash(input),
@@ -311,7 +322,7 @@ export class SendLedger {
         template: input.template,
         templateEligibility: input.templateEligibility
       }),
-      input.policyRevision, now, now, input.expiresAt ?? null
+      input.policyRevision, now, now, input.expiresAt ?? null, batch?.batchId ?? null, batch?.batchOrdinal ?? null
     );
     this.event(id, undefined, 'queued', 'intent_created', now);
     return this.getIntent(id)!;
@@ -348,6 +359,43 @@ export class SendLedger {
       if (existing) return { intent: this.rowToIntent(existing), created: false };
       return { intent: this.insertIntent(input, now), created: true };
     });
+  }
+
+  /**
+   * WA-015: every part of a multipart reply commits in one transaction before the first
+   * part dispatches, so a crash mid-reply never leaves later parts without durable identity.
+   * Idempotent per part: a crash between commit and dispatch replays to the same intents.
+   */
+  createTextBatch(inputs: SendIntentInput[], now = Date.now()): Array<{ intent: SendIntent; created: boolean }> {
+    if (!inputs.length) throw new Error('A reply batch requires at least one part');
+    if (inputs.some((input) => input.actionKind !== 'text')) {
+      throw new Error('Reply batches carry text parts only');
+    }
+    return this.atomic(() => {
+      // Resolve idempotency for every part before inserting anything: a conflicting
+      // part must fail the whole batch, not half of it.
+      const resolved = inputs.map((input) => {
+        const existing = this.getBySource(input);
+        if (existing) {
+          if (existing.payloadHash !== payloadHash(input)) throw new SendIntentConflictError();
+          return { intent: existing, created: false };
+        }
+        return undefined;
+      });
+      const batchId = resolved.find((item) => item?.intent.batchId)?.intent.batchId ?? randomUUID();
+      return inputs.map((input, ordinal) =>
+        resolved[ordinal] ?? { intent: this.insertIntent(input, now, { batchId, batchOrdinal: ordinal }), created: true }
+      );
+    });
+  }
+
+  /** WA-015: the batch part that must finish before this one may dispatch. */
+  batchPredecessor(id: string): SendIntent | undefined {
+    const intent = this.getIntent(id);
+    if (!intent?.batchId || intent.batchOrdinal === undefined || intent.batchOrdinal === 0) return undefined;
+    const row = this.db.prepare('SELECT * FROM send_intents WHERE batch_id=? AND batch_ordinal=? LIMIT 1')
+      .get(intent.batchId, intent.batchOrdinal - 1);
+    return row ? this.rowToIntent(row) : undefined;
   }
 
   failQueued(id: string, reason: string, now = Date.now()): SendIntent | undefined {
@@ -388,10 +436,38 @@ export class SendLedger {
     });
   }
 
-  markNetworkStarted(attemptId: string, now = Date.now()): void {
-    this.db.prepare(`
-      UPDATE send_attempts SET network_started_at=? WHERE id=? AND outcome='attempting'
-    `).run(now, attemptId);
+  /**
+   * WA-004: the only path that may mark network start. Fails closed unless this attempt still
+   * owns an unexpired lease on an intent that is still attempting: an expired or recovered
+   * claim must never reach the transport, because a retry may already own the intent.
+   */
+  tryMarkNetworkStarted(id: string, attemptId: string, now = Date.now()): boolean {
+    return this.atomic(() => {
+      const intent = this.getIntent(id);
+      if (!intent || intent.state !== 'attempting' ||
+          !intent.leaseExpiresAt || intent.leaseExpiresAt <= now) return false;
+      const changed = this.db.prepare(`
+        UPDATE send_attempts SET network_started_at=?
+        WHERE id=? AND intent_id=? AND outcome='attempting' AND network_started_at IS NULL
+      `).run(now, attemptId, id);
+      return changed.changes === 1;
+    });
+  }
+
+  /**
+   * WA-004: a fenced attempt provably never reached the network (network_started_at is NULL),
+   * so it is safe to requeue without reconciliation. If the sweeper already recovered the
+   * intent, return the current state instead of touching it.
+   */
+  requeueFencedPreNetwork(id: string, attemptId: string, retryAt: number, maxAttempts: number, now = Date.now()): SendIntent | undefined {
+    const intent = this.getIntent(id);
+    if (!intent) return undefined;
+    if (intent.state !== 'attempting') return intent;
+    const terminal = intent.attemptCount >= maxAttempts;
+    return this.transitionAttempt(
+      id, attemptId, terminal ? 'failed' : 'queued', 'pre_send_failed',
+      'lease_fenced_pre_network', now, undefined, terminal ? 0 : retryAt
+    ) ?? this.getIntent(id);
   }
 
   private transitionAttempt(

@@ -9,6 +9,7 @@ import { GeminiClient } from './ai/gemini-client';
 import { ModeratorAgent } from './ai/moderator-agent';
 import { VoiceSynthesizer } from './ai/voice-synthesizer';
 import { BurstAccumulator, type FusedBurst } from './domain/burst-accumulator';
+import { InboundJobLedger } from './domain/inbound-job-ledger';
 import { MessageSplitter } from './domain/message-splitter';
 import { MemoryStore } from './domain/memory-store';
 import { SendIntentService, type VerifiedTemplateAuthorization } from './domain/send-intent-service';
@@ -219,22 +220,23 @@ export async function createFableWhatsAppAgent(options: {
             const bubbles = messageSplitter.split(result.decision.replyText!);
             console.log(`🤖 [Agent Auto-Reply] Replying in ${bubbles.length} natural bubble(s)...`);
 
-            for (let i = 0; i < bubbles.length; i++) {
-              const bubbleText = bubbles[i];
-              const isFirstBubble = i === 0;
-              const delay = messageSplitter.calculateDelay(bubbleText, isFirstBubble);
+            // WA-015: commit every bubble durably as one batch BEFORE the first dispatch.
+            // A crash mid-replay resumes from the ledger instead of re-splitting, and the
+            // predecessor gate keeps bubbles strictly ordered across retries.
+            const batch = await sendIntents.createTextBatch(bubbles.map((bubbleText, i) => ({
+              sourceKind: 'autopilot',
+              sourceId: `${fusedMsg.chatId}:${fusedMsg.id}:part-${i + 1}-of-${bubbles.length}`,
+              sourceRevision: 1,
+              actionKind: 'text' as const,
+              chatId: fusedMsg.chatId,
+              text: bubbleText,
+              replyToMessageId: i === 0 ? fusedMsg.id : undefined,
+              simulatedDelayMs: messageSplitter.calculateDelay(bubbleText, i === 0),
+              policyRevision: moderatorAgent.getPolicy().version
+            })));
 
-              const deliveryResult = await sendIntents.sendText({
-                sourceKind: 'autopilot',
-                sourceId: `${fusedMsg.chatId}:${fusedMsg.id}:part-${i + 1}-of-${bubbles.length}`,
-                sourceRevision: 1,
-                actionKind: 'text',
-                chatId: fusedMsg.chatId,
-                text: bubbleText,
-                replyToMessageId: isFirstBubble ? fusedMsg.id : undefined,
-                simulatedDelayMs: delay,
-                policyRevision: moderatorAgent.getPolicy().version
-              });
+            for (const part of batch) {
+              const deliveryResult = await sendIntents.dispatch(part.intent.id);
               if (!['accepted', 'delivered', 'read'].includes(deliveryResult.intent.state)) {
                 console.warn('[Delivery] Stopped remaining bubbles after a pending send', deliveryResult.intent.state);
                 break;
@@ -243,8 +245,27 @@ export async function createFableWhatsAppAgent(options: {
             }
           });
         }
+
+        // WA-005: the turn's durable jobs are done once the decision executed.
+        // A fail-closed rejection means the turn NEVER processed: release the
+        // job for a later retry instead of completing it, or the customer's
+        // message would be answered never (review triage on #97, comment 3).
+        const retryIntents = new Set(['turn_queue_expired', 'admission_full', 'planner_lane_busy']);
+        for (const m of burst.messages) {
+          const jobId = InboundJobLedger.jobIdFor(m.chatId, m.id);
+          if (retryIntents.has(result.decision.intent ?? '')) {
+            memoryStore.getInboundJobLedger().failAttempt(jobId, result.decision.intent ?? 'queue_rejected');
+          } else {
+            memoryStore.getInboundJobLedger().complete(jobId);
+          }
+        }
       } catch (err: any) {
         logEvent('error', 'agent_processing_error', { error: describeError(err) });
+        for (const m of burst.messages) {
+          memoryStore.getInboundJobLedger().failAttempt(
+            InboundJobLedger.jobIdFor(m.chatId, m.id), describeError(err)
+          );
+        }
       }
     }
   });
@@ -259,23 +280,59 @@ export async function createFableWhatsAppAgent(options: {
   const handleInboundMessage = async (msg: ChatMessage, delivery?: { historical: boolean }): Promise<void> => {
     if (!msg.text?.trim() && msg.type === 'text') return;
     if (msg.text === '[رسالة]') return;
-    if (memoryStore.getMessage(msg.chatId, msg.id)) return;
 
     if (!msg.isFromMe && recipientDirectory && brandId) {
       const identity = recipientDirectory.observeAlias({ brandId, jid: msg.chatId });
       proactiveScheduler?.onCustomerMessage({ brandId, contactId: identity.contactId, text: msg.text });
     }
-    const persistedMessage = memoryStore.addMessage(msg);
-    sse.broadcast('new_message', persistedMessage);
-    sse.broadcast('chat_updated', { chatId: msg.chatId });
 
-    if (msg.isFromMe || delivery?.historical) return;
-    if (transportMode === 'baileys') {
+    // WA-005: decide eligibility BEFORE the atomic persist so the message and
+    // its response job commit together; historical and self traffic is stored
+    // without a job, exactly as before.
+    let eligible = !msg.isFromMe && !delivery?.historical;
+    if (eligible && transportMode === 'baileys') {
       const ownPhone = whatsappClient.getState().connectedUser?.phone;
-      if (ownPhone && msg.chatId.startsWith(ownPhone)) return;
+      if (ownPhone && msg.chatId.startsWith(ownPhone)) eligible = false;
     }
-    burstAccumulator.push(msg);
+
+    // S01/WA-005: only a FIRST live delivery creates work. A replay of an
+    // already-stored message (history re-sync, duplicate webhook) never
+    // spawns a job; recovery of an interrupted job is the sweep's role.
+    const alreadyKnown = !!memoryStore.getMessage(msg.chatId, msg.id);
+    const persisted = memoryStore.saveInboundMessageWithJob(msg, { createJob: eligible && !alreadyKnown });
+    if (!persisted.message) return;
+    if (persisted.isNew) {
+      sse.broadcast('new_message', persisted.message);
+      sse.broadcast('chat_updated', { chatId: msg.chatId });
+    }
+
+    if (!eligible || !persisted.created) return;
+    // Claim before pushing: if the process dies while the message sits in the
+    // RAM burst buffer, the lease expires and the recovery sweep re-drives it.
+    const claimed = memoryStore.getInboundJobLedger().claim(persisted.job!.id, inboundOwner);
+    if (claimed) burstAccumulator.push(msg);
+    // A rejected push (intake stopped) is safe: the durable job's lease
+    // expires and recovery re-drives the work on this or the next process.
   };
+
+  // WA-005: re-drive durable inbound jobs whose owner died mid-flight.
+  const inboundOwner = 'inbound-' + process.pid + '-' + Date.now();
+  const recoverInboundJobs = () => {
+    try {
+      const ledger = memoryStore.getInboundJobLedger();
+      ledger.recoverExpiredLeases();
+      for (const job of ledger.due()) {
+        const claimed = ledger.claim(job.id, inboundOwner);
+        if (!claimed) continue;
+        if (!burstAccumulator.push(claimed.payload)) return;
+      }
+    } catch (err) {
+      console.warn('[Inbound] Recovery sweep failed:', describeError(err));
+    }
+  };
+  recoverInboundJobs();
+  const inboundRecoveryTimer = setInterval(recoverInboundJobs, 5000);
+  inboundRecoveryTimer.unref();
 
   whatsappClient = new WhatsAppSocketClient({
     sessionDir: `${dataDir}/session`,
@@ -529,9 +586,18 @@ export async function createFableWhatsAppAgent(options: {
 
   const shutdown = async () => {
     if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
+    clearInterval(inboundRecoveryTimer);
     reflectionWorker.stopPeriodicSweep();
     proactiveAbort?.abort();
-    await burstAccumulator.drain();
+    // WA-008: drain and retry outstanding learning-state writes before closing stores.
+    await dualMemoryManager.flushPendingWrites();
+    // WA-007: stop intake first so late inbound work is durably deferred to
+    // the job ledger, then drain within a deadline and report what is left.
+    burstAccumulator.stopIntake();
+    const drainResult = await burstAccumulator.drain({ deadlineMs: 10_000 });
+    if (!drainResult.completed) {
+      console.warn('[Shutdown] Burst drain deadline elapsed; callbacks still running for:', drainResult.inFlightChats);
+    }
     sse.close();
     if (transportMode === 'baileys') {
       await whatsappClient.disconnect(false);
@@ -546,14 +612,22 @@ export async function createFableWhatsAppAgent(options: {
     reflectionWorker.stopPeriodicSweep();
     proactiveAbort?.abort();
   });
-  const unregBurst = defaultLifecycle.register('burst_queue', 'drain_queues', () => burstAccumulator.drain());
+  const unregBurst = defaultLifecycle.register('burst_queue', 'drain_queues', async () => {
+    clearInterval(inboundRecoveryTimer);
+    burstAccumulator.stopIntake();
+    const result = await burstAccumulator.drain({ deadlineMs: 10_000 });
+    if (!result.completed) {
+      console.warn('[Shutdown] Burst drain deadline elapsed; callbacks still running for:', result.inFlightChats);
+    }
+  });
   const unregTransport = defaultLifecycle.register('transport', 'disconnect_transport', async () => {
     sse.close();
     if (transportMode === 'baileys') {
       await whatsappClient.disconnect(false);
     }
   });
-  const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', () => {
+  const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', async () => {
+    await dualMemoryManager.flushPendingWrites();
     memoryStore.close();
     recipientDirectory?.close();
     capabilities.followups.close();

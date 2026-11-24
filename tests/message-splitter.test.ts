@@ -27,7 +27,7 @@ describe('MessageSplitter', () => {
 
   it('exposes the typing delay call used by the WhatsApp send path', () => {
     const handler = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
-    expect(handler).toContain('messageSplitter.calculateDelay(bubbleText, isFirstBubble)');
+    expect(handler).toContain('messageSplitter.calculateDelay(bubbleText, i === 0)');
   });
 
   it('never silently drops content when replying in more than three paragraphs', () => {

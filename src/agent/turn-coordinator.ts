@@ -4,6 +4,8 @@ import type {MemoryStore} from '../domain/memory-store';
 import type {AutonomousOperator} from './autonomous-operator';
 import type {InboundPlanner} from './inbound-planner';
 import type {JevRouteRequest, RoutingDecision} from '../ai/model-router';
+import {ConversationQueueError, ExecutionQueue} from './execution-queue';
+import {hashChatId, logEvent} from '../observability/safe-log';
 
 type DecisionResult=Awaited<ReturnType<ModeratorAgent['processInboundMessage']>>;
 type CoordinatorDependencies={
@@ -18,53 +20,59 @@ type CoordinatorDependencies={
 };
 /** Opt-in verified-data lane; general conversation and sensitive decisions retain moderator policy. */
 export class AgentTurnCoordinator {
-  private active=new Map<string,Promise<void>>();
+  private readonly queue: ExecutionQueue;
   private readonly turnTimeoutMs: number;
-  constructor(private readonly deps:CoordinatorDependencies, options: { turnTimeoutMs?: number } = {}){
+  constructor(private readonly deps:CoordinatorDependencies, options: { turnTimeoutMs?: number; maxChats?: number } = {}){
     this.turnTimeoutMs = options.turnTimeoutMs ?? 45_000;
+    this.queue = new ExecutionQueue({ timeoutMs: this.turnTimeoutMs, maxKeys: options.maxChats ?? 1000 });
   }
   async processInboundMessage(message:ChatMessage,delivery?:{historical?:boolean;replayed?:boolean}):Promise<DecisionResult>{
     if(delivery?.historical||delivery?.replayed)return {
       decision:{action:'ignore',intent:'replay',reasoning:'Historical or replayed inbound message',confidence:1,simulatedDelayMs:0},
       shouldSendImmediately:false
     };
-    const prior=this.active.get(message.chatId)??Promise.resolve();
-    let release!:()=>void;
-    const ready=new Promise<void>(resolve=>{release=resolve;});
-    const pending=prior.then(()=>ready);
-    this.active.set(message.chatId,pending);
 
-    let priorTimer: ReturnType<typeof setTimeout> | undefined;
-    const boundedPrior = Promise.race([
-      prior,
-      new Promise<void>((_, reject) => {
-        priorTimer = setTimeout(() => reject(new Error('Turn queue timeout waiting for prior turn')), this.turnTimeoutMs);
-      })
-    ]).finally(() => {
-      if (priorTimer) clearTimeout(priorTimer);
-    });
-
+    let release:()=>void;
     try {
-      await boundedPrior;
+      release = await this.queue.acquire(message.chatId);
     } catch (err) {
-      console.warn('[AgentTurnCoordinator] Prior turn queue settled with error or timeout:', err);
+      if (err instanceof ConversationQueueError) {
+        // A queued turn whose wait expired must never process next to the
+        // still-active predecessor (WA-001/WA-002). Fail closed without any
+        // side effect; durable recovery of dropped intake is WA-005's scope.
+        // Admission rejections stay distinguishable from wait timeouts and
+        // are logged server-side so operators see the pressure signal.
+        logEvent('warn', 'turn_queue_rejected', { chat: hashChatId(message.chatId), reason: err.reason });
+        return {
+          decision:{action:'ignore',intent: err.reason === 'admission_full' ? 'admission_full' : 'turn_queue_expired',reasoning:`Turn not started: ${err.message}`,confidence:1,simulatedDelayMs:0},
+          shouldSendImmediately:false
+        };
+      }
+      throw err;
     }
 
-    let turnTimer: ReturnType<typeof setTimeout> | undefined;
-    const boundedProcess = Promise.race([
-      this.process(message),
-      new Promise<never>((_, reject) => {
-        turnTimer = setTimeout(() => reject(new Error(`Agent turn timed out after ${this.turnTimeoutMs}ms`)), this.turnTimeoutMs);
-      })
-    ]).finally(() => {
-      if (turnTimer) clearTimeout(turnTimer);
-    });
+    // Ownership is released only when the underlying turn actually settles.
+    // A timed-out Promise is not a cancelled operation: an expired turn keeps
+    // exclusive ownership of the chat so no successor can overlap its late
+    // tool writes, and its eventual result is discarded rather than published.
+    const processPromise = this.process(message);
+    void processPromise.then(() => release(), () => release());
 
-    try{return await boundedProcess;}
+    let turnTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        processPromise,
+        new Promise<never>((_, reject) => {
+          turnTimer = setTimeout(() => reject(new Error(`Agent turn timed out after ${this.turnTimeoutMs}ms`)), this.turnTimeoutMs);
+        })
+      ]);
+    }
     catch (err: any) {
+      // Fail closed with an ignore decision: a timed-out turn must not publish,
+      // send, or masquerade as a persisted draft.
       return {
         decision: {
-          action: 'draft',
+          action: 'ignore',
           intent: 'processing_timeout',
           reasoning: `Turn processing error or timeout: ${err?.message || 'unknown'}`,
           confidence: 0,
@@ -74,8 +82,7 @@ export class AgentTurnCoordinator {
       };
     }
     finally {
-      release();
-      if(this.active.get(message.chatId)===pending)this.active.delete(message.chatId);
+      if (turnTimer) clearTimeout(turnTimer);
     }
   }
   private async process(message:ChatMessage):Promise<DecisionResult>{

@@ -388,7 +388,7 @@ describe('S08 and S01 durable send diagnostics integration', () => {
     const accepted = ledger.createIntent(intent({ sourceId: 'accepted-mutation' }));
     const claimed = ledger.claim(accepted.id, 'test-worker', Date.now());
     expect(claimed).toBeDefined();
-    ledger.markNetworkStarted(claimed!.attempt.id);
+    expect(ledger.tryMarkNetworkStarted(accepted.id, claimed!.attempt.id)).toBe(true);
     ledger.accepted(accepted.id, claimed!.attempt.id, nativeId);
     ledger.advanceReceipt(chatId, nativeId, 'read');
 

@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { SqliteStore } from './db';
 
@@ -89,6 +90,17 @@ export class DualMemoryManager {
   private workbookCache!: WorkbookState;
   private notebookCache!: NotebookState;
 
+  // WA-008: monotonic local revision per state, serialized remote writes, and observable errors.
+  private revisions: Record<'workbook' | 'notebook', number> = { workbook: 0, notebook: 0 };
+  private persistedRevisions: Record<'workbook' | 'notebook', number> = { workbook: 0, notebook: 0 };
+  private persistChains: Record<'workbook' | 'notebook', Promise<void>> = {
+    workbook: Promise.resolve(), notebook: Promise.resolve()
+  };
+  private lastPersistError?: { stateType: string; message: string; at: number };
+  // False when this process created the file from defaults: a remote copy then wins hydration.
+  private localWorkbookTrusted = false;
+  private localNotebookTrusted = false;
+
   constructor(options: DualMemoryOptions = {}) {
     this.storageDir = options.storageDir ?? './data/learning';
     this.persistenceStore = options.persistenceStore;
@@ -116,6 +128,7 @@ export class DualMemoryManager {
     try {
       const wbRaw = readFileSync(this.workbookPath, 'utf-8');
       this.workbookCache = this.parseWorkbook(wbRaw);
+      this.localWorkbookTrusted = true;
     } catch (err: unknown) {
       const isNotFound = err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'ENOENT';
       if (isNotFound) {
@@ -140,6 +153,7 @@ export class DualMemoryManager {
     try {
       const nbRaw = readFileSync(this.notebookPath, 'utf-8');
       this.notebookCache = this.parseNotebook(nbRaw);
+      this.localNotebookTrusted = true;
     } catch (err: unknown) {
       const isNotFound = err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'ENOENT';
       if (isNotFound) {
@@ -162,27 +176,46 @@ export class DualMemoryManager {
   async hydrateFromPersistence(): Promise<void> {
     if (!this.persistenceStore) return;
     try {
-      const wbState = await this.persistenceStore.getLearningState(this.brandId, 'workbook');
-      if (wbState?.content?.trim()) {
-        this.workbookCache = this.parseWorkbook(wbState.content);
-        try {
-          writeFileSync(this.workbookPath, wbState.content, 'utf-8');
-        } catch (err: unknown) {
-          console.warn('[DualMemoryManager] Could not mirror workbook state to local file:', err);
-        }
-      }
-      const nbState = await this.persistenceStore.getLearningState(this.brandId, 'notebook');
-      if (nbState?.content?.trim()) {
-        this.notebookCache = this.parseNotebook(nbState.content);
-        try {
-          writeFileSync(this.notebookPath, nbState.content, 'utf-8');
-        } catch (err: unknown) {
-          console.warn('[DualMemoryManager] Could not mirror notebook state to local file:', err);
-        }
-      }
+      await this.hydrateOne('workbook');
+      await this.hydrateOne('notebook');
     } catch (err: unknown) {
       console.warn('⚠️ [DualMemoryManager] Could not hydrate from persistence store:', err);
     }
+  }
+
+  /**
+   * WA-008: a stale remote copy must never overwrite newer local state. The remote wins when the
+   * local file was created from defaults by this process (fresh workspace) or when the remote is
+   * at least as new as the local mirror; otherwise local state is kept and pushed back to heal
+   * the remote's lost update.
+   */
+  private async hydrateOne(stateType: 'workbook' | 'notebook'): Promise<void> {
+    const remote = await this.persistenceStore!.getLearningState(this.brandId, stateType);
+    if (!remote?.content?.trim()) return;
+    const path = stateType === 'workbook' ? this.workbookPath : this.notebookPath;
+    const localTrusted = stateType === 'workbook' ? this.localWorkbookTrusted : this.localNotebookTrusted;
+    let localMtime = 0;
+    try { localMtime = statSync(path).mtimeMs; } catch { /* missing mirror: remote wins */ }
+    const remoteWins = !localTrusted || !localMtime || remote.updatedAt >= localMtime;
+    if (remoteWins) {
+      const parsedState = stateType === 'workbook' ? this.parseWorkbook(remote.content) : undefined;
+      if (stateType === 'workbook') {
+        this.workbookCache = parsedState!;
+      } else {
+        this.notebookCache = this.parseNotebook(remote.content);
+      }
+      try {
+        this.atomicMirrorWrite(path, remote.content);
+      } catch (err: unknown) {
+        console.warn(`[DualMemoryManager] Could not mirror ${stateType} state to local file:`, err);
+      }
+      return;
+    }
+    // Local is newer: keep it and re-push so the remote recovers the lost update.
+    console.warn(`[DualMemoryManager] Remote ${stateType} state is older than the local mirror; keeping local and re-pushing.`);
+    this.schedulePersist(stateType, stateType === 'workbook'
+      ? this.formatWorkbook(this.workbookCache)
+      : this.formatNotebook(this.notebookCache));
   }
 
   // --- Workbook Methods ---
@@ -556,13 +589,13 @@ export class DualMemoryManager {
       const remoteWb = await this.persistenceStore.getLearningState(this.brandId, 'workbook');
       if (remoteWb?.content) {
         this.workbookCache = this.parseWorkbook(remoteWb.content);
-        writeFileSync(this.workbookPath, remoteWb.content, 'utf-8');
+        this.atomicMirrorWrite(this.workbookPath, remoteWb.content);
       }
 
       const remoteNb = await this.persistenceStore.getLearningState(this.brandId, 'notebook');
       if (remoteNb?.content) {
         this.notebookCache = this.parseNotebook(remoteNb.content);
-        writeFileSync(this.notebookPath, remoteNb.content, 'utf-8');
+        this.atomicMirrorWrite(this.notebookPath, remoteNb.content);
       }
       return true;
     } catch (err: any) {
@@ -571,37 +604,97 @@ export class DualMemoryManager {
     }
   }
 
+  /**
+   * WA-008: atomic local mirror replacement. A crash or concurrent reader never sees a
+   * half-written mirror; the rename also removes the check-then-write race on the path.
+   */
+  private atomicMirrorWrite(path: string, content: string): void {
+    const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, content, "utf-8");
+    renameSync(tmp, path);
+  }
+
   private persistWorkbook(): void {
     const content = this.formatWorkbook(this.workbookCache);
-    writeFileSync(this.workbookPath, content, 'utf-8');
-
-    if (this.persistenceStore) {
-      void Promise.resolve(this.persistenceStore.saveLearningState(this.brandId, 'workbook', content)).catch((err) => {
-        console.warn('⚠️ [DualMemoryManager] Persistence store save error:', err.message);
-      });
-    } else if (this.persistSqlite && this.sqliteStore) {
-      try {
-        this.sqliteStore.saveLearningState(this.brandId, 'workbook', content);
-      } catch {
-        // Fallback gracefully if SQLite method not present
-      }
-    }
+    this.atomicMirrorWrite(this.workbookPath, content);
+    this.schedulePersist('workbook', content);
   }
 
   private persistNotebook(): void {
     const content = this.formatNotebook(this.notebookCache);
-    writeFileSync(this.notebookPath, content, 'utf-8');
+    this.atomicMirrorWrite(this.notebookPath, content);
+    this.schedulePersist('notebook', content);
+  }
 
-    if (this.persistenceStore) {
-      void Promise.resolve(this.persistenceStore.saveLearningState(this.brandId, 'notebook', content)).catch((err) => {
-        console.warn('⚠️ [DualMemoryManager] Persistence store save error:', err.message);
-      });
-    } else if (this.persistSqlite && this.sqliteStore) {
-      try {
-        this.sqliteStore.saveLearningState(this.brandId, 'notebook', content);
-      } catch {
-        // Fallback gracefully if SQLite method not present
+  /**
+   * WA-008: remote writes are serialized per state and guarded by a monotonic local revision.
+   * A newer local mutation supersedes a queued older snapshot, so out-of-order async completion
+   * can never leave the remote holding stale content. Failures are recorded, logged and retried
+   * on the next mutation or an explicit flush — never swallowed.
+   */
+  private schedulePersist(stateType: 'workbook' | 'notebook', content: string): void {
+    const revision = ++this.revisions[stateType];
+    if (!this.persistenceStore) {
+      // The SQLite mirror is synchronous: keep its write-through contract so a mutation is
+      // visible to readers in the same tick, and surface failures instead of swallowing them.
+      if (this.persistSqlite && this.sqliteStore) {
+        try {
+          this.sqliteStore.saveLearningState(this.brandId, stateType, content);
+          this.persistedRevisions[stateType] = Math.max(this.persistedRevisions[stateType], revision);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.lastPersistError = { stateType, message, at: Date.now() };
+          console.warn(`⚠️ [DualMemoryManager] ${stateType} SQLite persistence failed (revision ${revision}):`, message);
+        }
+      }
+      return;
+    }
+    this.persistChains[stateType] = this.persistChains[stateType].then(async () => {
+      if (revision < this.revisions[stateType]) return; // a newer snapshot is already queued
+      await this.persistToStores(stateType, content, revision);
+    });
+  }
+
+  private async persistToStores(stateType: 'workbook' | 'notebook', content: string, revision: number): Promise<void> {
+    try {
+      await this.persistenceStore!.saveLearningState(this.brandId, stateType, content);
+      this.persistedRevisions[stateType] = Math.max(this.persistedRevisions[stateType], revision);
+      if (this.persistedRevisions.workbook >= this.revisions.workbook &&
+          this.persistedRevisions.notebook >= this.revisions.notebook) {
+        this.lastPersistError = undefined;
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.lastPersistError = { stateType, message, at: Date.now() };
+      console.warn(`⚠️ [DualMemoryManager] ${stateType} persistence failed (revision ${revision}):`, message);
+    }
+  }
+
+  /** Observable persistence health: the last failed remote write, if any is unrecovered. */
+  getPersistenceHealth(): { lastError?: { stateType: string; message: string; at: number }; pendingRevisions: number } {
+    return {
+      lastError: this.lastPersistError ? { ...this.lastPersistError } : undefined,
+      pendingRevisions:
+        (this.revisions.workbook - this.persistedRevisions.workbook) +
+        (this.revisions.notebook - this.persistedRevisions.notebook)
+    };
+  }
+
+  /**
+   * WA-008: drain outstanding writes (call before shutdown) and retry the latest snapshot of any
+   * state whose newest revision never landed. The last error remains observable afterwards.
+   */
+  async flushPendingWrites(): Promise<void> {
+    await Promise.all([this.persistChains.workbook, this.persistChains.notebook]);
+    const retries: Promise<void>[] = [];
+    for (const stateType of ['workbook', 'notebook'] as const) {
+      if (this.persistedRevisions[stateType] < this.revisions[stateType]) {
+        const content = stateType === 'workbook'
+          ? this.formatWorkbook(this.workbookCache)
+          : this.formatNotebook(this.notebookCache);
+        retries.push(this.persistToStores(stateType, content, this.revisions[stateType]));
       }
     }
+    await Promise.all(retries);
   }
 }

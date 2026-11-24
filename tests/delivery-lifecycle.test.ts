@@ -42,7 +42,7 @@ describe('delivery lifecycle across restarts', () => {
     const intent = ledger.createIntent(input());
     const t0 = Date.now();
     const claimed = ledger.claim(intent.id, 'dead-worker', t0, 30_000)!;
-    ledger.markNetworkStarted(claimed.attempt.id, t0 + 1);
+    expect(ledger.tryMarkNetworkStarted(intent.id, claimed.attempt.id, t0 + 1)).toBe(true);
     first.close(); // process dies here: no outcome recorded
 
     let calls = 0;
