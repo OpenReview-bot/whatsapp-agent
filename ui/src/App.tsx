@@ -180,9 +180,27 @@ export function App() {
     const eventSource = new EventSource('/api/events');
 
     eventSource.addEventListener('state_change', (e: MessageEvent) => {
-      const updatedState = JSON.parse(e.data);
-      setStatus((prev) => (prev ? { ...prev, ...updatedState } : updatedState));
+      try {
+        const updatedState = JSON.parse(e.data);
+        setStatus((prev) => {
+          if (!prev) return updatedState;
+          return {
+            ...prev,
+            ...updatedState,
+            error: updatedState.error ?? undefined,
+            qrDataUrl: updatedState.qrDataUrl ?? undefined,
+            pairingCode: updatedState.pairingCode ?? undefined
+          };
+        });
+      } catch {
+        // Ignore malformed message
+      }
     });
+
+    eventSource.onerror = () => {
+      // Resynchronize on connection drop or reconnect
+      void loadInitialData();
+    };
 
     eventSource.addEventListener('new_message', (e: MessageEvent) => {
       const newMsg: ChatMessage = JSON.parse(e.data);

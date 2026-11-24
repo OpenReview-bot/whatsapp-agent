@@ -18,6 +18,10 @@ export interface DoctorProbes {
   gcloudAuthenticated: () => Promise<boolean>;
   /** True when a paired Baileys session is saved. */
   sessionPaired: () => boolean;
+  /** Verifies SQLite writeability and commit capability */
+  testStorageWrite?: () => boolean;
+  /** Verifies Baileys connection validator patch is applied */
+  baileysPatched?: () => boolean;
 }
 
 export interface DoctorReport {
@@ -64,8 +68,19 @@ export async function runDoctor(probes: DoctorProbes, options: { preflightOnly?:
   try {
     const chats = probes.openStorage();
     add({ id: 'storage', section: 'preflight', level: 'pass', label: `Local storage opens (${chats} chats indexed)` });
+    if (probes.testStorageWrite) {
+      probes.testStorageWrite();
+      add({ id: 'storage-write', section: 'preflight', level: 'pass', label: 'Local storage is writable (WAL commit verified)' });
+    }
   } catch (err) {
-    add({ id: 'storage', section: 'preflight', level: 'fail', label: 'Local storage cannot be opened', detail: err instanceof Error ? err.message : String(err) });
+    add({ id: 'storage', section: 'preflight', level: 'fail', label: 'Local storage error', detail: err instanceof Error ? err.message : String(err) });
+  }
+
+  if (probes.baileysPatched) {
+    const patched = probes.baileysPatched();
+    add(patched
+      ? { id: 'baileys-patch', section: 'preflight', level: 'pass', label: 'Baileys protocol patch verified' }
+      : { id: 'baileys-patch', section: 'preflight', level: 'fail', label: 'Baileys protocol patch missing', detail: 'Run `bun patch-baileys.mjs`.' });
   }
 
   add(probes.uiBuilt()

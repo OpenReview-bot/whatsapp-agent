@@ -69,6 +69,7 @@ export class WhatsAppSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private pairingCodeRequestedNumber: string | null = null;
+  private startMutex: Promise<void> = Promise.resolve();
 
   constructor(options: WhatsAppSocketOptions = {}) {
     this.sessionDir = options.sessionDir ?? './data/session';
@@ -105,13 +106,39 @@ export class WhatsAppSocketClient {
       ...updates,
       updatedAt: Date.now()
     };
-    this.onStateChange?.(this.currentState);
+    if ('error' in updates && updates.error === undefined) delete this.currentState.error;
+    if ('qrDataUrl' in updates && updates.qrDataUrl === undefined) delete this.currentState.qrDataUrl;
+    if ('pairingCode' in updates && updates.pairingCode === undefined) delete this.currentState.pairingCode;
+
+    // Emit a JSON-normalized snapshot where cleared fields are explicitly null
+    const snapshot = {
+      ...this.currentState,
+      qrDataUrl: this.currentState.qrDataUrl ?? null,
+      pairingCode: this.currentState.pairingCode ?? null,
+      error: this.currentState.error ?? null
+    };
+    this.onStateChange?.(snapshot as PairingState);
   }
 
   /**
-   * Initializes and starts the WhatsApp socket connection
+   * Initializes and starts the WhatsApp socket connection with serialization mutex
    */
   async start(pairingPhoneNumber?: string, options?: { refresh?: boolean }): Promise<void> {
+    const priorMutex = this.startMutex;
+    let releaseMutex!: () => void;
+    this.startMutex = new Promise<void>((resolve) => { releaseMutex = resolve; });
+    await priorMutex.catch((err) => {
+      console.warn('[WhatsAppSocket] Prior startMutex invocation settled with error:', err);
+    });
+
+    try {
+      await this.internalStart(pairingPhoneNumber, options);
+    } finally {
+      releaseMutex();
+    }
+  }
+
+  private async internalStart(pairingPhoneNumber?: string, options?: { refresh?: boolean }): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -127,7 +154,7 @@ export class WhatsAppSocketClient {
 
     if (pairingPhoneNumber) {
       this.pairingCodeRequestedNumber = pairingPhoneNumber.replace(/\D/g, '');
-    } else if (options?.refresh) {
+    } else if (options?.refresh || !pairingPhoneNumber) {
       this.pairingCodeRequestedNumber = null;
     }
 
@@ -353,6 +380,10 @@ export class WhatsAppSocketClient {
 
           if (raw.key?.id && raw.message) {
             this.rawMessages.set(raw.key.id, raw);
+            if (this.rawMessages.size > 500) {
+              const firstKey = this.rawMessages.keys().next().value;
+              if (firstKey) this.rawMessages.delete(firstKey);
+            }
           }
 
           try {
@@ -397,6 +428,10 @@ export class WhatsAppSocketClient {
     }
 
     this.transportJids.set(normalized, jid);
+    if (this.transportJids.size > 1000) {
+      const first = this.transportJids.keys().next().value;
+      if (first) this.transportJids.delete(first);
+    }
     return normalized;
   }
 
@@ -473,20 +508,27 @@ export class WhatsAppSocketClient {
       type = 'text';
     } else if (message.audioMessage) {
       type = 'audio';
-      try {
-        if (this.sock) {
-          const buffer = (await downloadMediaMessage(raw as WAMessage, 'buffer', {})) as Buffer;
-          audioBuffer = buffer;
-          if (this.audioTranscriber && buffer && buffer.length > 0) {
-            const result = await this.audioTranscriber.transcribeAudio(buffer, message.audioMessage.mimetype || 'audio/ogg; codecs=opus');
-            transcription = result.transcription;
-            text = transcription ? `🎵 [صوتي: ${transcription}]` : '🎵 [رسالة صوتية]';
-          } else {
-            text = '🎵 [رسالة صوتية]';
+      const fileLength = Number(message.audioMessage.fileLength ?? 0);
+      const MAX_AUDIO_BYTES = 16 * 1024 * 1024; // 16 MB limit to prevent low-spec VPS OOM
+      if (fileLength > MAX_AUDIO_BYTES) {
+        console.warn(`[WhatsApp] Audio attachment exceeds 16MB limit (${fileLength} bytes). Skipping download.`);
+        text = '🎵 [رسالة صوتية - الحجم يتجاوز 16 ميجابايت]';
+      } else {
+        try {
+          if (this.sock) {
+            const buffer = (await downloadMediaMessage(raw as WAMessage, 'buffer', {})) as Buffer;
+            audioBuffer = buffer;
+            if (this.audioTranscriber && buffer && buffer.length > 0) {
+              const result = await this.audioTranscriber.transcribeAudio(buffer, message.audioMessage.mimetype || 'audio/ogg; codecs=opus');
+              transcription = result.transcription;
+              text = transcription ? `🎵 [صوتي: ${transcription}]` : '🎵 [رسالة صوتية]';
+            } else {
+              text = '🎵 [رسالة صوتية]';
+            }
           }
+        } catch {
+          text = '🎵 [رسالة صوتية]';
         }
-      } catch {
-        text = '🎵 [رسالة صوتية]';
       }
     } else if (message.imageMessage) {
       type = 'image';

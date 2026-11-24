@@ -31,6 +31,7 @@ import { PostgresLearningStore } from './persistence/postgres/learning-store';
 import { resolveRuntimeDatastore } from './persistence/postgres/runtime-selection';
 import { join } from 'node:path';
 import { describeBurst, describeError, hashChatId, logEvent } from './observability/safe-log';
+import { defaultLifecycle } from './server/lifecycle';
 
 export async function createFableWhatsAppAgent(options: {
   port?: number;
@@ -101,6 +102,7 @@ export async function createFableWhatsAppAgent(options: {
     persistSqlite: !postgresLearningStore,
     brandId: options.capabilityAutopilotBrandId ?? process.env.AGENT_AUTOPILOT_BRAND_ID ?? 'default'
   });
+  await dualMemoryManager.hydrateFromPersistence();
 
   const reflectionEngine = new ReflectionEngine(geminiClient, dualMemoryManager);
 
@@ -514,14 +516,48 @@ export async function createFableWhatsAppAgent(options: {
       onError: (error) => console.warn('[Proactive] Scheduler tick failed:', describeError(error))
     });
   }
+  let deliveryRetryTimer: ReturnType<typeof setInterval> | undefined;
   if (options.autoConnect) {
-    setInterval(() => {
+    deliveryRetryTimer = setInterval(() => {
       if (metaClient || whatsappClient.getState().state === 'connected') {
         void sendIntents.dispatchDue().catch((error) => console.warn('[Delivery] Retry scan failed:', describeError(error)));
       }
-    }, 5000).unref();
+    }, 5000);
+    deliveryRetryTimer.unref();
     if (!metaClient) void whatsappClient.start();
   }
+
+  const shutdown = async () => {
+    if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
+    reflectionWorker.stopPeriodicSweep();
+    proactiveAbort?.abort();
+    await burstAccumulator.drain();
+    sse.close();
+    if (transportMode === 'baileys') {
+      await whatsappClient.disconnect(false);
+    }
+    memoryStore.close();
+    recipientDirectory?.close();
+    capabilities.followups.close();
+  };
+
+  const unregSchedulers = defaultLifecycle.register('schedulers', 'stop_ingestion', () => {
+    if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
+    reflectionWorker.stopPeriodicSweep();
+    proactiveAbort?.abort();
+  });
+  const unregBurst = defaultLifecycle.register('burst_queue', 'drain_queues', () => burstAccumulator.drain());
+  const unregTransport = defaultLifecycle.register('transport', 'disconnect_transport', async () => {
+    sse.close();
+    if (transportMode === 'baileys') {
+      await whatsappClient.disconnect(false);
+    }
+  });
+  const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', () => {
+    memoryStore.close();
+    recipientDirectory?.close();
+    capabilities.followups.close();
+  });
 
   return {
     app,
@@ -542,18 +578,29 @@ export async function createFableWhatsAppAgent(options: {
     funnelEngine,
     dualMemoryManager,
     reflectionWorker,
-    reflectionEngine
+    reflectionEngine,
+    shutdown,
+    unregisterLifecycle: () => {
+      unregSchedulers();
+      unregBurst();
+      unregTransport();
+      unregDatastores();
+    }
   };
 }
 
 if (import.meta.main) {
   const host = process.env.HOST || '127.0.0.1';
   assertSafeDashboardBind(host, process.env.AGENT_DASHBOARD_TOKEN ?? '');
+  defaultLifecycle.attachSignalHandlers();
   const agent = await createFableWhatsAppAgent({ autoConnect: true });
   console.log(`✨ [Fable Agentic WhatsApp] Live at http://localhost:${agent.port}`);
-  Bun.serve({
+  const server = Bun.serve({
     fetch: agent.app.fetch,
     port: agent.port,
     hostname: host
+  });
+  defaultLifecycle.register('http_server', 'stop_ingestion', () => {
+    server.stop(true);
   });
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SqliteStore } from './db';
 
@@ -105,8 +105,12 @@ export class DualMemoryManager {
   }
 
   private ensureInitialized(): void {
-    if (!existsSync(this.storageDir)) {
+    try {
       mkdirSync(this.storageDir, { recursive: true });
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code !== 'EEXIST') {
+        // Ignore directory exists error
+      }
     }
 
     try {
@@ -149,6 +153,35 @@ export class DualMemoryManager {
       } else {
         throw err;
       }
+    }
+  }
+
+  /**
+   * Hydrates memory caches from persistence store (e.g. Supabase / PostgreSQL) at startup.
+   */
+  async hydrateFromPersistence(): Promise<void> {
+    if (!this.persistenceStore) return;
+    try {
+      const wbState = await this.persistenceStore.getLearningState(this.brandId, 'workbook');
+      if (wbState?.content?.trim()) {
+        this.workbookCache = this.parseWorkbook(wbState.content);
+        try {
+          writeFileSync(this.workbookPath, wbState.content, 'utf-8');
+        } catch (err: unknown) {
+          console.warn('[DualMemoryManager] Could not mirror workbook state to local file:', err);
+        }
+      }
+      const nbState = await this.persistenceStore.getLearningState(this.brandId, 'notebook');
+      if (nbState?.content?.trim()) {
+        this.notebookCache = this.parseNotebook(nbState.content);
+        try {
+          writeFileSync(this.notebookPath, nbState.content, 'utf-8');
+        } catch (err: unknown) {
+          console.warn('[DualMemoryManager] Could not mirror notebook state to local file:', err);
+        }
+      }
+    } catch (err: unknown) {
+      console.warn('⚠️ [DualMemoryManager] Could not hydrate from persistence store:', err);
     }
   }
 

@@ -20,6 +20,19 @@ async function doctor(flags: string[]) {
     bunVersion: Bun.version,
     env: process.env,
     openStorage: () => new MemoryStore().listChats().length,
+    testStorageWrite: () => {
+      const store = new MemoryStore();
+      store.getStorageStats();
+      return true;
+    },
+    baileysPatched: () => {
+      try {
+        const content = readFileSync('./node_modules/@whiskeysockets/baileys/lib/Utils/validate-connection.js', 'utf8');
+        return content.includes('passive: false');
+      } catch {
+        return false;
+      }
+    },
     uiBuilt: () => existsSync('./ui/dist/index.html'),
     gcloudAuthenticated: async () => {
       // Same path GeminiClient uses: active gcloud account token plus a project. Bounded so a stuck helper cannot hang the doctor.

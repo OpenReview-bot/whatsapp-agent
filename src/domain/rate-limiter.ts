@@ -89,9 +89,20 @@ export class HumanRateLimiter {
       .then(async () => {
         try {
           result = await action();
-          const list = this.chatSendTimestamps.get(chatId) ?? [];
-          list.push(Date.now());
+          const now = Date.now();
+          const windowStart = now - 60_000;
+          const list = (this.chatSendTimestamps.get(chatId) ?? []).filter((t) => t > windowStart);
+          list.push(now);
           this.chatSendTimestamps.set(chatId, list);
+
+          if (this.chatSendTimestamps.size > 500) {
+            for (const [k, timestamps] of this.chatSendTimestamps) {
+              const active = timestamps.filter((t) => t > windowStart);
+              if (active.length === 0) {
+                this.chatSendTimestamps.delete(k);
+              }
+            }
+          }
         } catch (err) {
           actionError = err;
         }

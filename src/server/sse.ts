@@ -43,4 +43,8 @@ export class SSEBroadcaster {
   get clientCount(): number {
     return this.subscribers.size;
   }
+
+  close(): void {
+    this.subscribers.clear();
+  }
 }

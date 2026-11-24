@@ -144,3 +144,19 @@ Thumbs.db
 .fable/incidents/
 .fable/watchdog-heartbeat.json
 docs/session-learnings/
+
+# Zero-Slop & Environment Hygiene
+agent-kernel/env-vault/
+*worktrees/
+*.worktree*/
+*.wave.*
+coordinator.*/
+*.pem
+*.key
+.anti-slop/scratch/
+.no-mistakes/
+docker-compose.override.yml
+docker-compose.local.yml
+*.tar.gz
+*.tgz
+*.zip

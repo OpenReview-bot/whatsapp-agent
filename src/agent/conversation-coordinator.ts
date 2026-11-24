@@ -5,6 +5,11 @@
  */
 export class ConversationCoordinator {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly timeoutMs: number;
+
+  constructor(options: { timeoutMs?: number } = {}) {
+    this.timeoutMs = options.timeoutMs ?? 45_000;
+  }
 
   async run<T>(brandId: string, contactId: string, task: () => Promise<T>): Promise<T> {
     const key = String(brandId.length) + ':' + brandId + contactId;
@@ -13,8 +18,22 @@ export class ConversationCoordinator {
     const current = new Promise<void>((resolve) => { release = resolve; });
     this.tails.set(key, current);
 
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    const boundedPrevious = previous
+      ? Promise.race([
+          previous,
+          new Promise<void>((_, reject) => {
+            waitTimer = setTimeout(() => reject(new Error('ConversationCoordinator queue timeout')), this.timeoutMs);
+          })
+        ]).finally(() => {
+          if (waitTimer) clearTimeout(waitTimer);
+        })
+      : Promise.resolve();
+
     try {
-      await previous;
+      await boundedPrevious.catch((err) => {
+        console.warn('[ConversationCoordinator] Prior task in queue settled with rejection or timeout:', err);
+      });
       return await task();
     } finally {
       release();

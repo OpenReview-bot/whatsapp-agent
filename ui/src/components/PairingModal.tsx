@@ -17,6 +17,7 @@ export function PairingModal({ status, isOpen, onClose, onConnect, onDisconnect 
   const { tr } = useLocale();
   const [tab, setTab] = useState<'qr' | 'phone'>('qr');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const isConnecting = status?.state === 'connecting';
 
   useModalDismiss(isOpen, onClose);
 
@@ -61,7 +62,7 @@ export function PairingModal({ status, isOpen, onClose, onConnect, onDisconnect 
                     ) : (
                       <div className="wa-qr-placeholder">
                         <QrCode size={46} strokeWidth={1.3} />
-                        <span>{tr('رمز QR مش جاهز لسه', 'QR code is not ready yet')}</span>
+                        <span>{isConnecting ? tr('جاري إنشاء الرمز...', 'Generating QR code...') : tr('رمز QR مش جاهز لسه', 'QR code is not ready yet')}</span>
                       </div>
                     )}
                   </div>
@@ -70,7 +71,7 @@ export function PairingModal({ status, isOpen, onClose, onConnect, onDisconnect 
                     <li>{tr('ادخل إلى الأجهزة المرتبطة', 'Go to Linked devices')}</li>
                     <li>{tr('اختار ربط جهاز وامسح الرمز', 'Tap Link a device and scan this code')}</li>
                   </ol>
-                  <Button variant="ghost" label={tr('إنشاء رمز جديد', 'Generate a new code')} icon={<RefreshCw size={16} />} onClick={() => onConnect(undefined, true)} />
+                  <Button variant="ghost" label={isConnecting ? tr('جاري إنشاء الرمز...', 'Generating code...') : tr('إنشاء رمز جديد', 'Generate a new code')} isDisabled={isConnecting} icon={<RefreshCw size={16} className={isConnecting ? 'wa-spin' : ''} />} onClick={() => onConnect(undefined, true)} />
                 </div>
               ) : (
                 <div className="wa-phone-panel">

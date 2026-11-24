@@ -1,6 +1,7 @@
 import type { GeminiClient } from './gemini-client';
 import { DualMemoryManager, type FailureLogEntry } from '../domain/learning-memory';
 import type { ChatMessage } from '../domain/types';
+import { executeWithModelFallback, resolveModelChain } from './model-fallback';
 
 export interface ModerationFeedbackEvent {
   chatId: string;
@@ -136,18 +137,19 @@ Analyze this data and return your evaluation strictly in the following JSON stru
   ]
 }`;
 
-    const response = await this.gemini.generateContent(
-      [{ role: 'user', parts: [{ text: prompt }] }],
-      {
-        model: this.model,
-        systemInstruction: REFLECTION_SYSTEM_INSTRUCTION,
-        temperature: 0.2,
-        thinkingConfig: {
-          thinkingLevel: 'HIGH'
-        },
-        responseMimeType: 'application/json'
-      }
-    );
+    const chain = resolveModelChain(this.model, 'gemini-3.1-pro', 'gemini-3.8-flash');
+    const { result: response } = await executeWithModelFallback(chain, async (targetModel) => {
+      return this.gemini.generateContent(
+        [{ role: 'user', parts: [{ text: prompt }] }],
+        {
+          model: targetModel,
+          systemInstruction: REFLECTION_SYSTEM_INSTRUCTION,
+          temperature: 0.2,
+          thinkingConfig: targetModel.includes('argon') ? { thinkingLevel: 'HIGH' } : undefined,
+          responseMimeType: 'application/json'
+        }
+      );
+    });
 
     let parsed: any;
     try {
@@ -180,7 +182,11 @@ Analyze this data and return your evaluation strictly in the following JSON stru
     }
 
     // 2. Process New Enforced Rules
-    if (Array.isArray(parsed.newEnforcedRules)) {
+    // Security Guard: Global enforced rules in workbook.md can ONLY be added when explicit human
+    // moderation feedback is present. This prevents untrusted customer prompt injection from
+    // authoring global execution guardrails for other customers.
+    const hasHumanFeedback = Boolean(moderationFeedback && moderationFeedback.length > 0);
+    if (hasHumanFeedback && Array.isArray(parsed.newEnforcedRules)) {
       for (const rule of parsed.newEnforcedRules) {
         if (typeof rule === 'string' && rule.trim()) {
           this.memoryManager.addEnforcedRule(rule.trim());

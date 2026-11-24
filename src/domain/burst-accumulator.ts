@@ -133,6 +133,17 @@ export class BurstAccumulator {
   }
 
   /**
+   * Gracefully flushes and processes all pending bursts across all chats
+   */
+  async drain(): Promise<void> {
+    const chatIds = Array.from(this.buffers.keys());
+    for (const chatId of chatIds) {
+      await this.flush(chatId);
+    }
+    this.destroy();
+  }
+
+  /**
    * Cleans all active timers
    */
   destroy() {

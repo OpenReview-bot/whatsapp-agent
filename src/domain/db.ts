@@ -67,6 +67,7 @@ export class SqliteStore {
   private init() {
     this.db.run('PRAGMA journal_mode = WAL;');
     this.db.run('PRAGMA synchronous = NORMAL;');
+    this.db.run('PRAGMA busy_timeout = 5000;');
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS chats (
@@ -881,6 +882,13 @@ export class SqliteStore {
   }
 
   close() {
+    try {
+      if (this.dbPath !== ':memory:') {
+        this.db.run('PRAGMA wal_checkpoint(TRUNCATE);');
+      }
+    } catch {
+      // Ignore checkpoint error during teardown
+    }
     this.db.close();
   }
 }

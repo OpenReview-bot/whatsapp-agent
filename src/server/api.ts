@@ -96,6 +96,61 @@ export function createApiServer(deps: ApiDependencies): Hono {
     });
   });
 
+  // Liveness & Readiness Probes
+  const handleLiveness = (c: any) => {
+    let dbAvailable = false;
+    try {
+      dbAvailable = Boolean(deps.memoryStore);
+    } catch (err) {
+      console.warn('[API] Healthcheck datastore probe failed:', err);
+      dbAvailable = false;
+    }
+    const isHealthy = dbAvailable;
+    return c.json({
+      status: isHealthy ? 'ok' : 'unhealthy',
+      uptimeSeconds: Math.round(process.uptime()),
+      database: dbAvailable ? 'available' : 'unavailable',
+      timestamp: Date.now()
+    }, isHealthy ? 200 : 503);
+  };
+  app.get('/healthz', handleLiveness);
+  app.get('/api/healthz', handleLiveness);
+
+  const handleReadiness = (c: any) => {
+    let dbOk = false;
+    let chatsCount = 0;
+    try {
+      chatsCount = deps.memoryStore.listChats().length;
+      dbOk = true;
+    } catch (err) {
+      console.warn('[API] Readiness probe database verification failed:', err);
+      dbOk = false;
+    }
+
+    const state = deps.whatsappClient && typeof deps.whatsappClient.getState === 'function'
+      ? deps.whatsappClient.getState()
+      : { state: 'disconnected' };
+    const transportMode = deps.transportMode ?? 'baileys';
+    const isReady = dbOk;
+
+    const payload = {
+      status: isReady ? 'ready' : 'unready',
+      checks: {
+        database: dbOk ? 'healthy' : 'unhealthy',
+        chatsCount,
+        transport: {
+          mode: transportMode,
+          state: state.state
+        }
+      },
+      timestamp: Date.now()
+    };
+
+    return c.json(payload, isReady ? 200 : 503);
+  };
+  app.get('/readyz', handleReadiness);
+  app.get('/api/readyz', handleReadiness);
+
   // Status & Connection
   app.get('/api/status', (c) => {
     const state = deps.whatsappClient.getState();

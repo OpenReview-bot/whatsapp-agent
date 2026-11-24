@@ -19,7 +19,10 @@ type CoordinatorDependencies={
 /** Opt-in verified-data lane; general conversation and sensitive decisions retain moderator policy. */
 export class AgentTurnCoordinator {
   private active=new Map<string,Promise<void>>();
-  constructor(private readonly deps:CoordinatorDependencies){}
+  private readonly turnTimeoutMs: number;
+  constructor(private readonly deps:CoordinatorDependencies, options: { turnTimeoutMs?: number } = {}){
+    this.turnTimeoutMs = options.turnTimeoutMs ?? 45_000;
+  }
   async processInboundMessage(message:ChatMessage,delivery?:{historical?:boolean;replayed?:boolean}):Promise<DecisionResult>{
     if(delivery?.historical||delivery?.replayed)return {
       decision:{action:'ignore',intent:'replay',reasoning:'Historical or replayed inbound message',confidence:1,simulatedDelayMs:0},
@@ -30,8 +33,46 @@ export class AgentTurnCoordinator {
     const ready=new Promise<void>(resolve=>{release=resolve;});
     const pending=prior.then(()=>ready);
     this.active.set(message.chatId,pending);
-    await prior;
-    try{return await this.process(message);}
+
+    let priorTimer: ReturnType<typeof setTimeout> | undefined;
+    const boundedPrior = Promise.race([
+      prior,
+      new Promise<void>((_, reject) => {
+        priorTimer = setTimeout(() => reject(new Error('Turn queue timeout waiting for prior turn')), this.turnTimeoutMs);
+      })
+    ]).finally(() => {
+      if (priorTimer) clearTimeout(priorTimer);
+    });
+
+    try {
+      await boundedPrior;
+    } catch (err) {
+      console.warn('[AgentTurnCoordinator] Prior turn queue settled with error or timeout:', err);
+    }
+
+    let turnTimer: ReturnType<typeof setTimeout> | undefined;
+    const boundedProcess = Promise.race([
+      this.process(message),
+      new Promise<never>((_, reject) => {
+        turnTimer = setTimeout(() => reject(new Error(`Agent turn timed out after ${this.turnTimeoutMs}ms`)), this.turnTimeoutMs);
+      })
+    ]).finally(() => {
+      if (turnTimer) clearTimeout(turnTimer);
+    });
+
+    try{return await boundedProcess;}
+    catch (err: any) {
+      return {
+        decision: {
+          action: 'draft',
+          intent: 'processing_timeout',
+          reasoning: `Turn processing error or timeout: ${err?.message || 'unknown'}`,
+          confidence: 0,
+          simulatedDelayMs: 0
+        },
+        shouldSendImmediately: false
+      };
+    }
     finally {
       release();
       if(this.active.get(message.chatId)===pending)this.active.delete(message.chatId);
