@@ -11,6 +11,8 @@ import makeWASocket, {
   type WAMessage
 } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
+import { Readable } from 'node:stream';
+import { readStreamWithCap, MediaTooLargeError } from '../agent/media-bounds';
 import pino from 'pino';
 import { rmSync, mkdirSync } from 'node:fs';
 import type { AudioTranscriber } from '../ai/audio-transcriber';
@@ -78,6 +80,9 @@ export interface WhatsAppSocketOptions {
   authStateFactory?: (sessionDir: string) => Promise<{ state: any; saveCreds: () => Promise<void> }>;
   versionProvider?: () => Promise<{ version: [number, number, number] }>;
   reconnectDelays?: { baseMs: number; maxMs: number };
+  /** WA-017 test seam: media download as a stream so byte caps are enforced during
+   * transfer. Production default preserves Baileys downloadMediaMessage behavior. */
+  mediaDownloader?: (message: WAMessage) => Promise<Readable>;
 }
 
 export class WhatsAppSocketClient {
@@ -134,6 +139,7 @@ export class WhatsAppSocketClient {
   private readonly authStateFactory: (sessionDir: string) => Promise<{ state: any; saveCreds: () => Promise<void> }>;
   private readonly versionProvider: () => Promise<{ version: [number, number, number] }>;
   private readonly reconnectDelays: { baseMs: number; maxMs: number };
+  private readonly mediaDownloader: (message: WAMessage) => Promise<Readable>;
 
   constructor(options: WhatsAppSocketOptions = {}) {
     this.sessionDir = options.sessionDir ?? './data/session';
@@ -146,6 +152,8 @@ export class WhatsAppSocketClient {
     this.authStateFactory = options.authStateFactory ?? ((dir) => useMultiFileAuthState(dir));
     this.versionProvider = options.versionProvider ?? (() => fetchLatestBaileysVersion());
     this.reconnectDelays = options.reconnectDelays ?? { baseMs: 500, maxMs: 15_000 };
+    this.mediaDownloader = options.mediaDownloader
+      ?? ((message) => downloadMediaMessage(message, 'stream', {}) as unknown as Promise<Readable>);
   }
 
   getState(): PairingState {
@@ -625,7 +633,10 @@ export class WhatsAppSocketClient {
       } else {
         try {
           if (this.sock) {
-            const buffer = (await downloadMediaMessage(raw as WAMessage, 'buffer', {})) as Buffer;
+            // WA-017: stream with a hard byte cap during transfer; a false declared
+            // fileLength can never cause an unbounded download.
+            const stream = await this.mediaDownloader(raw as WAMessage);
+            const buffer = await readStreamWithCap(stream, MAX_AUDIO_BYTES);
             audioBuffer = buffer;
             if (this.audioTranscriber && buffer && buffer.length > 0) {
               const result = await this.audioTranscriber.transcribeAudio(buffer, message.audioMessage.mimetype || 'audio/ogg; codecs=opus');
@@ -635,8 +646,13 @@ export class WhatsAppSocketClient {
               text = '🎵 [رسالة صوتية]';
             }
           }
-        } catch {
-          text = '🎵 [رسالة صوتية]';
+        } catch (err) {
+          if (err instanceof MediaTooLargeError) {
+            console.warn('[WhatsApp] Audio download exceeded the 16MB cap during transfer. Discarding.');
+            text = '🎵 [رسالة صوتية - الحجم يتجاوز 16 ميجابايت]';
+          } else {
+            text = '🎵 [رسالة صوتية]';
+          }
         }
       }
     } else if (message.imageMessage) {

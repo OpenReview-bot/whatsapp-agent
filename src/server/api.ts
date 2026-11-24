@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
+import { MEDIA_LIMITS, sniffImageMime, sharedMediaLimiter } from '../agent/media-bounds';
 import type { AudioTranscriber } from '../ai/audio-transcriber';
 import type { ModeratorAgent } from '../ai/moderator-agent';
 import type { VoiceSynthesizer } from '../ai/voice-synthesizer';
@@ -602,6 +603,11 @@ export function createApiServer(deps: ApiDependencies): Hono {
 
   // Sticker Studio conversion endpoint
   app.post('/api/media/sticker', async (c) => {
+    // WA-017: reject oversized requests before JSON/base64 decoding allocates memory.
+    const declaredLength = Number(c.req.header('content-length') ?? 0);
+    if (declaredLength > MEDIA_LIMITS.maxStickerRequestBytes) {
+      return c.json({ error: 'Sticker request exceeds maximum allowable size' }, 413);
+    }
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body.imageBase64 !== 'string' || !body.imageBase64.trim()) {
       return c.json({ error: 'imageBase64 is required' }, 400);
@@ -616,6 +622,13 @@ export function createApiServer(deps: ApiDependencies): Hono {
       if (inputBuffer.length === 0) {
         return c.json({ error: 'Decoded image buffer is empty' }, 400);
       }
+      // WA-017: decoded-size cap and magic-byte MIME validation; declared types are never trusted.
+      if (inputBuffer.length > MEDIA_LIMITS.maxStickerDecodedBytes) {
+        return c.json({ error: 'Decoded image exceeds maximum allowable size (10MB)' }, 413);
+      }
+      if (!sniffImageMime(inputBuffer)) {
+        return c.json({ error: 'Unsupported image content: expected PNG, JPEG, GIF or WebP' }, 415);
+      }
 
       if (!Bun.which('cwebp')) {
         return c.json({ error: 'cwebp utility is not installed on this server' }, 503);
@@ -629,29 +642,39 @@ export function createApiServer(deps: ApiDependencies): Hono {
         await Bun.write(inPath, inputBuffer);
 
         const qualities = [75, 50, 30];
-        let webpBuffer: Buffer | null = null;
 
-        for (const q of qualities) {
-          try {
-            const proc = Bun.spawn(['cwebp', '-q', String(q), '-resize', '512', '512', inPath, '-o', outPath], {
-              stdout: 'ignore',
-              stderr: 'ignore'
-            });
-            const exitCode = await proc.exited;
-            if (exitCode === 0) {
-              const file = Bun.file(outPath);
-              if (file.size > 0 && file.size <= 101888) {
-                webpBuffer = Buffer.from(await file.arrayBuffer());
-                break;
-              } else if (file.size > 101888 && q === qualities[qualities.length - 1]) {
-                webpBuffer = Buffer.from(await file.arrayBuffer());
+        // WA-017: bounded global media concurrency + subprocess deadline with kill/cleanup.
+        const webpBuffer: Buffer | null = await sharedMediaLimiter.run(async () => {
+          for (const q of qualities) {
+            try {
+              const proc = Bun.spawn(['cwebp', '-q', String(q), '-resize', '512', '512', inPath, '-o', outPath], {
+                stdout: 'ignore',
+                stderr: 'ignore'
+              });
+              const killTimer = setTimeout(() => {
+                try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+              }, MEDIA_LIMITS.stickerSubprocessTimeoutMs);
+              let exitCode: number;
+              try {
+                exitCode = await proc.exited;
+              } finally {
+                clearTimeout(killTimer);
               }
+              if (exitCode === 0) {
+                const file = Bun.file(outPath);
+                if (file.size > 0 && file.size <= 101888) {
+                  return Buffer.from(await file.arrayBuffer());
+                } else if (file.size > 101888 && q === qualities[qualities.length - 1]) {
+                  return Buffer.from(await file.arrayBuffer());
+                }
+              }
+            } catch (spawnErr) {
+              console.warn('[StickerStudio] cwebp spawn failed:', spawnErr);
+              return null;
             }
-          } catch (spawnErr) {
-            console.warn('[StickerStudio] cwebp spawn failed:', spawnErr);
-            break;
           }
-        }
+          return null;
+        });
 
         if (!webpBuffer) {
           return c.json({ error: 'Failed to convert image to WhatsApp WebP sticker' }, 500);
