@@ -6,6 +6,8 @@
  * a Baileys wrapper when the Meta transport is selected.
  */
 
+import { transportCapabilities } from './transport/capabilities';
+
 export type RuntimeProfileName = 'CORE_MINIMAL' | 'FULL';
 export type TransportMode = 'baileys' | 'meta-cloud';
 
@@ -77,6 +79,13 @@ export function capabilityMatrix(profile: RuntimeProfileConfig, transport: Trans
       capability: 'proactive',
       enabled: profile.proactiveEnabled,
       reason: profile.proactiveEnabled ? 'enabled by profile' : `disabled in ${profile.name} profile`
-    }
+    },
+    // WA-024: per-transport feature rows so the UI and operators never assume
+    // feature parity the active transport does not have.
+    ...transportCapabilities(transport).map((row) => ({
+      capability: `feature:${row.feature}`,
+      enabled: row.supported,
+      reason: row.reason
+    }))
   ];
 }

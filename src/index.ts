@@ -380,6 +380,17 @@ export async function createFableWhatsAppAgent(options: {
   }
 
   const handleMetaEvent = async (event: MetaCloudWebhookEvent): Promise<void> => {
+    if (event.kind === 'unsupported_content') {
+      // WA-024: surface unsupported inbound content explicitly; never fake
+      // parity by routing it into the text pipeline.
+      logEvent('warn', 'meta_unsupported_content', {
+        chatId: event.chatId, messageType: event.messageType, nativeMessageId: event.nativeMessageId
+      });
+      sse.broadcast('unsupported_content', {
+        chatId: event.chatId, messageId: event.nativeMessageId, messageType: event.messageType
+      });
+      return;
+    }
     if (event.kind === 'inbound_text') {
       await handleInboundMessage({
         id: event.nativeMessageId,

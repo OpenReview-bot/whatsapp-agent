@@ -3,6 +3,7 @@ export type SSEEventType =
   | 'new_message'
   | 'message_status'
   | 'message_delivery_failed'
+  | 'unsupported_content'
   | 'send_intent'
   | 'agent_thought'
   | 'new_draft'

@@ -117,6 +117,11 @@ export const api = {
     return handleResponse<{ status: string }>(res, 'Failed to disconnect WhatsApp');
   },
 
+  async getRuntimeCapabilities(): Promise<{ capabilities: Array<{ capability: string; enabled: boolean; reason: string }> }> {
+    const res = await fetch(`${BASE_URL}/runtime/capabilities`, { cache: 'no-store' });
+    return handleResponse<{ capabilities: Array<{ capability: string; enabled: boolean; reason: string }> }>(res, 'Failed to fetch runtime capabilities');
+  },
+
   async listChats(): Promise<{ chats: ChatSummary[] }> {
     const res = await fetch(`${BASE_URL}/chats`);
     return handleResponse<{ chats: ChatSummary[] }>(res, 'Failed to list chats');

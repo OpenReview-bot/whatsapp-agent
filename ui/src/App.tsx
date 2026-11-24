@@ -6,6 +6,7 @@ import { Badge as AstryxBadge } from '@astryxdesign/core/Badge';
 import { StatusDot } from '@astryxdesign/core/StatusDot';
 import { api } from './api/client';
 import { ChatRequestCoordinator } from './lib/chat-request-coordinator';
+import { featureEnabled, type CapabilityRow } from './lib/capabilities';
 import type { AgentDecision, AgentDraft, AgentMode, ChatMessage, ChatSummary, ModeratorPersona, PolicyConfig, SystemStatus } from './api/types';
 import { ChatList } from './components/ChatList';
 import { BrandBrainPage } from './components/BrandBrainPage';
@@ -46,6 +47,8 @@ export function App() {
   const selectedChatIdRef = useRef<string | undefined>(selectedChatId);
   // WA-020: generation-gated request cycles; stale responses never apply.
   const messageSyncRef = useRef(new ChatRequestCoordinator());
+  // WA-024: transport feature capabilities; unsupported actions are hidden.
+  const [capabilityRows, setCapabilityRows] = useState<CapabilityRow[]>([]);
   useEffect(() => {
     selectedChatIdRef.current = selectedChatId;
   }, [selectedChatId]);
@@ -89,14 +92,16 @@ export function App() {
   // Load initial data
   const loadInitialData = useCallback(async () => {
     try {
-      const [statusRes, chatsRes, draftsRes, personaRes] = await Promise.all([
+      const [statusRes, chatsRes, draftsRes, personaRes, capsRes] = await Promise.all([
         api.getStatus().catch(() => null),
         api.listChats().catch(() => ({ chats: [] })),
         api.listDrafts().catch(() => ({ drafts: [] })),
-        api.getPersona().catch(() => null)
+        api.getPersona().catch(() => null),
+        api.getRuntimeCapabilities().catch(() => null)
       ]);
 
       if (statusRes) setStatus(statusRes);
+      if (capsRes?.capabilities) setCapabilityRows(capsRes.capabilities);
       if (chatsRes.chats && Array.isArray(chatsRes.chats)) {
         setChats(chatsRes.chats);
         setSelectedChatId((prev) => {
@@ -573,7 +578,7 @@ export function App() {
           </button>
         </nav>
         <ChatList chats={chats} selectedChatId={selectedChatId} pendingDraftChatIds={pendingDraftChatIds} onSelectChat={selectChat} />
-        <ChatThread key={selectedChatId || 'empty'} chat={selectedChat} messages={messages} onSendMessage={handleSendMessage} onRetrySendIntent={handleRetrySendIntent} onSendReaction={handleSendReaction} onChangeMode={handleChangeMode} onBack={() => setMobileView('list')} onOpenInspector={() => openInspector('assistant')} onDeleteChat={handleDeleteChat} onClearMessages={handleClearChatMessages} />
+        <ChatThread key={selectedChatId || 'empty'} chat={selectedChat} messages={messages} reactionsEnabled={featureEnabled(capabilityRows, 'feature:reactions', true)} onSendMessage={handleSendMessage} onRetrySendIntent={handleRetrySendIntent} onSendReaction={handleSendReaction} onChangeMode={handleChangeMode} onBack={() => setMobileView('list')} onOpenInspector={() => openInspector('assistant')} onDeleteChat={handleDeleteChat} onClearMessages={handleClearChatMessages} />
         <aside id="wa-agent-panel" className={'wa-agent-shell ' + (inspectorOpen ? 'is-open' : '')} aria-label={tr('لوحة المساعد الذكي', 'AI assistant panel')} aria-hidden={!inspectorVisible} inert={!inspectorVisible}>
           <button type="button" className="wa-inspector-close wa-icon-button" onClick={closeInspector} aria-label={tr('إغلاق لوحة المساعد', 'Close assistant panel')}><X size={20} /></button>
           <ModeratorDrawer key={(selectedChatId || 'none') + inspectorView} view={inspectorView} drafts={drafts} latestThought={latestThought} persona={persona} selectedChatId={selectedChatId} selectedChatMode={selectedChat?.agentMode} onSelectChat={selectChat} onApproveDraft={handleApproveDraft} onRejectDraft={handleRejectDraft} />
