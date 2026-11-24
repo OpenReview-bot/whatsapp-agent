@@ -744,13 +744,49 @@ export function createApiServer(deps: ApiDependencies): Hono {
 
   // Real-Time Server-Sent Events (SSE)
   app.get('/api/events', (c) => {
+    // WA-019: refuse new streams once the broadcaster is at capacity.
+    if (deps.sse.streamClientCount >= deps.sse.maxStreamClients) {
+      return c.json({ error: 'Too many SSE clients connected' }, 503);
+    }
     return streamSSE(c, async (stream) => {
-      const unsubscribe = deps.sse.subscribe((msg) => {
-        void stream.writeSSE({
-          event: msg.event,
-          data: JSON.stringify(msg.data)
-        });
+      let pingInterval: ReturnType<typeof setInterval> | undefined;
+      const stopPing = () => {
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = undefined;
+        }
+      };
+      let endStream: () => void = () => {};
+      const streamEnded = new Promise<void>((resolve) => {
+        endStream = resolve;
       });
+      let unsubscribe: (() => void) | null = null;
+      const finish = () => {
+        stopPing();
+        unsubscribe?.();
+        endStream();
+      };
+      // Broadcast writes are serialized and awaited per subscriber behind a
+      // bounded queue; a slow client is disconnected so it reconnects and
+      // resyncs from the authoritative snapshot instead of growing RAM.
+      unsubscribe = deps.sse.subscribeStream(
+        async (msg) => {
+          await stream.writeSSE({
+            event: msg.event,
+            data: JSON.stringify(msg.data)
+          });
+        },
+        {
+          onDisconnect: () => {
+            finish();
+          }
+        }
+      );
+      if (!unsubscribe) {
+        // Lost a capacity race; ending here lets streamSSE close the stream.
+        endStream();
+        return;
+      }
 
       // Send initial keep-alive
       await stream.writeSSE({
@@ -758,21 +794,28 @@ export function createApiServer(deps: ApiDependencies): Hono {
         data: JSON.stringify({ timestamp: Date.now() })
       });
 
-      // Keep alive interval
-      const pingInterval = setInterval(() => {
-        void stream.writeSSE({ event: 'ping', data: '{}' }).catch(() => {
-          clearInterval(pingInterval);
-          unsubscribe();
-        });
+      // Keep alive interval; never leave more than one ping write pending.
+      let pingInFlight = false;
+      pingInterval = setInterval(() => {
+        if (pingInFlight) return;
+        pingInFlight = true;
+        void stream
+          .writeSSE({ event: 'ping', data: '{}' })
+          .catch(() => {
+            finish();
+          })
+          .finally(() => {
+            pingInFlight = false;
+          });
       }, deps.sseHeartbeatMs ?? SSE_KEEP_ALIVE_MS);
 
       stream.onAbort(() => {
-        clearInterval(pingInterval);
-        unsubscribe();
+        finish();
       });
 
-      // Sleep until stream closes
-      await stream.sleep(86400000);
+      // Stay open until the client aborts or the broadcaster disconnects us;
+      // the callback then returns and streamSSE closes the stream.
+      await streamEnded;
     });
   });
 

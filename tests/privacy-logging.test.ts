@@ -13,7 +13,7 @@ let errSpy: ReturnType<typeof spyOn>;
 
 function captured(): string {
   const all = [...warnSpy.mock.calls, ...logSpy.mock.calls, ...errSpy.mock.calls];
-  return all.map((args) => args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a) ?? String(a))).join(' ')).join('\n');
+  return all.map((args) => args.map((a: unknown) => (typeof a === 'string' ? a : JSON.stringify(a) ?? String(a))).join(' ')).join('\n');
 }
 
 function setupSpies() {
