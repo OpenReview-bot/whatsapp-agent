@@ -589,6 +589,8 @@ export async function createFableWhatsAppAgent(options: {
     clearInterval(inboundRecoveryTimer);
     reflectionWorker.stopPeriodicSweep();
     proactiveAbort?.abort();
+    // WA-008: drain and retry outstanding learning-state writes before closing stores.
+    await dualMemoryManager.flushPendingWrites();
     // WA-007: stop intake first so late inbound work is durably deferred to
     // the job ledger, then drain within a deadline and report what is left.
     burstAccumulator.stopIntake();
@@ -624,7 +626,8 @@ export async function createFableWhatsAppAgent(options: {
       await whatsappClient.disconnect(false);
     }
   });
-  const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', () => {
+  const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', async () => {
+    await dualMemoryManager.flushPendingWrites();
     memoryStore.close();
     recipientDirectory?.close();
     capabilities.followups.close();

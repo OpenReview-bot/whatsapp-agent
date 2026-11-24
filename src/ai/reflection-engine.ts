@@ -82,9 +82,10 @@ export class ReflectionEngine {
     }).join('\n');
 
     // Format human moderation feedback
+    const scopedFeedback = (moderationFeedback ?? []).filter((fb) => fb && fb.chatId === chatId);
     let feedbackText = 'None recorded.';
-    if (moderationFeedback && moderationFeedback.length > 0) {
-      feedbackText = moderationFeedback.map(fb => {
+    if (scopedFeedback.length > 0) {
+      feedbackText = scopedFeedback.map(fb => {
         let str = `- Type: ${fb.feedbackType}`;
         if (fb.originalReply) str += ` | Proposed Draft: "${fb.originalReply}"`;
         if (fb.revisedReply) str += ` | Human Corrected To: "${fb.revisedReply}"`;
@@ -165,14 +166,26 @@ Analyze this data and return your evaluation strictly in the following JSON stru
     let bestPracticesAdded = 0;
     let factsAdded = 0;
 
+    // WA-003 trust boundaries for model output. The transcript is untrusted input: every entry is
+    // fully type-validated before any write, customer facts bind to THIS thread's server-supplied
+    // chatId, and global operational instructions (rules and best practices alike) require explicit
+    // human moderation feedback recorded for THIS chat.
+    const bounded = (value: unknown, max: number): value is string =>
+      typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+    const MAX_PER_REFLECTION = 10;
+    const KNOWN_STAGES = new Set(['lead', 'qualified', 'negotiation', 'customer', 'vip']);
+    // Only feedback recorded for this thread authorizes anything for this thread.
+    const chatFeedback = (moderationFeedback ?? []).filter((fb) => fb && fb.chatId === chatId);
+    const hasHumanFeedback = chatFeedback.length > 0;
+
     // 1. Process Self-Corrections & Failure Logs
     if (Array.isArray(parsed.selfCorrections)) {
-      for (const sc of parsed.selfCorrections) {
-        if (sc.incident && sc.correctiveAction) {
+      for (const sc of parsed.selfCorrections.slice(0, MAX_PER_REFLECTION)) {
+        if (sc && bounded(sc.incident, 1000) && bounded(sc.correctiveAction, 1000)) {
           const entry: FailureLogEntry = {
             timestamp: new Date().toISOString(),
             incident: sc.incident,
-            rootCause: sc.rootCause || 'Unspecified',
+            rootCause: bounded(sc.rootCause, 1000) ? sc.rootCause : 'Unspecified',
             correctiveAction: sc.correctiveAction
           };
           this.memoryManager.recordFailureLog(entry);
@@ -185,48 +198,52 @@ Analyze this data and return your evaluation strictly in the following JSON stru
     // Security Guard: Global enforced rules in workbook.md can ONLY be added when explicit human
     // moderation feedback is present. This prevents untrusted customer prompt injection from
     // authoring global execution guardrails for other customers.
-    const hasHumanFeedback = Boolean(moderationFeedback && moderationFeedback.length > 0);
     if (hasHumanFeedback && Array.isArray(parsed.newEnforcedRules)) {
-      for (const rule of parsed.newEnforcedRules) {
-        if (typeof rule === 'string' && rule.trim()) {
+      for (const rule of parsed.newEnforcedRules.slice(0, MAX_PER_REFLECTION)) {
+        if (bounded(rule, 500)) {
           this.memoryManager.addEnforcedRule(rule.trim());
           rulesAdded++;
         }
       }
     }
 
-    // 3. Process New Best Practices
-    if (Array.isArray(parsed.newBestPractices)) {
-      for (const bp of parsed.newBestPractices) {
-        if (typeof bp === 'string' && bp.trim()) {
+    // 3. Process New Best Practices — same trust tier as enforced rules: they are injected into
+    // every future prompt, so untrusted transcripts must not install them.
+    if (hasHumanFeedback && Array.isArray(parsed.newBestPractices)) {
+      for (const bp of parsed.newBestPractices.slice(0, MAX_PER_REFLECTION)) {
+        if (bounded(bp, 500)) {
           this.memoryManager.addBestPractice(bp.trim());
           bestPracticesAdded++;
         }
       }
     }
 
-    // 4. Process Customer Traits & Profiles
+    // 4. Process Customer Traits & Profiles — bound to this thread only. An insight naming any
+    // other chatId is a trust-boundary violation and is dropped, never written.
     if (Array.isArray(parsed.customerInsights)) {
-      for (const ci of parsed.customerInsights) {
-        if (ci.chatId && Array.isArray(ci.traits)) {
-          this.memoryManager.recordCustomerProfile(ci.chatId, {
-            traits: ci.traits,
-            stage: ci.stage
-          });
-          factsAdded += ci.traits.length;
-        }
+      for (const ci of parsed.customerInsights.slice(0, MAX_PER_REFLECTION)) {
+        if (!ci || ci.chatId !== chatId || !Array.isArray(ci.traits)) continue;
+        if (ci.stage !== undefined && !KNOWN_STAGES.has(ci.stage)) continue;
+        if (!ci.traits.every((t: unknown) => bounded(t, 280))) continue;
+        const traits = ci.traits.slice(0, MAX_PER_REFLECTION);
+        if (traits.length === 0) continue;
+        this.memoryManager.recordCustomerProfile(chatId, {
+          traits,
+          stage: ci.stage
+        });
+        factsAdded += traits.length;
       }
     }
 
     // 5. Process Thread Semantic Summary
-    if (parsed.threadSemanticSummary && typeof parsed.threadSemanticSummary === 'string') {
+    if (bounded(parsed.threadSemanticSummary, 2000)) {
       this.memoryManager.recordThreadSemantic(chatId, parsed.threadSemanticSummary);
     }
 
-    // 6. Process Business Signals
+    // 6. Process Business Signals — observational market context, never operational instructions.
     if (Array.isArray(parsed.businessSignals)) {
-      for (const bs of parsed.businessSignals) {
-        if (typeof bs === 'string' && bs.trim()) {
+      for (const bs of parsed.businessSignals.slice(0, MAX_PER_REFLECTION)) {
+        if (bounded(bs, 500)) {
           this.memoryManager.recordBusinessInsight(bs.trim());
         }
       }
