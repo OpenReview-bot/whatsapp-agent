@@ -19,7 +19,9 @@ export const MEDIA_LIMITS = {
   /** Global concurrent media operations across all pipelines. */
   maxConcurrentMedia: 4,
   /** How long a media operation may wait for a concurrency slot. */
-  mediaWaitMs: 30_000
+  mediaWaitMs: 30_000,
+  /** Untrusted webhook bodies: rejected before full buffering past this cap. */
+  maxWebhookBodyBytes: 1_048_576
 } as const;
 
 export class MediaTooLargeError extends Error {
@@ -47,6 +49,37 @@ export async function readStreamWithCap(stream: Readable, capBytes: number): Pro
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+/**
+ * WA-022: reads a web Request body with a hard byte cap during streaming. Combined with
+ * the Content-Length pre-check, an untrusted oversized body is rejected before full
+ * buffering whether it arrives with a declared length or chunked.
+ */
+export async function readRequestBodyTextWithCap(req: Request, capBytes: number): Promise<string> {
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > capBytes) {
+        throw new MediaTooLargeError(capBytes);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    if (total > capBytes) {
+      try { await reader.cancel(); } catch { /* best effort */ }
+    }
+    reader.releaseLock();
+  }
 }
 
 /** Magic-byte image sniffing; never trust a declared mimetype or file extension. */
