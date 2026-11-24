@@ -89,8 +89,33 @@ export class WhatsAppSocketClient {
   private onMessageCallback?: (message: ChatMessage, metadata?: { historical: boolean }) => void;
   private onReactionCallback?: (reaction: WhatsAppReactionEvent) => void;
   private onMessageStatusCallback?: (event: WhatsAppMessageStatusEvent) => void;
+  // WA-016: every insertion path into these caches enforces the bound (FIFO eviction).
+  private static readonly MAX_RAW_MESSAGES = 500;
+  private static readonly MAX_TRANSPORT_JIDS = 1000;
   private rawMessages = new Map<string, WAMessage>();
   private transportJids = new Map<string, string>();
+
+  /**
+   * WA-016: the ONLY way these caches grow. A cache set always enforces the documented
+   * bound, so no insertion path can leak memory in a long-running session.
+   */
+  private boundedCacheSet<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
+    if (map.has(key)) map.delete(key); // refresh FIFO position
+    map.set(key, value);
+    while (map.size > maxEntries) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+
+  /**
+   * WA-016: quote cache identity is (chat, message), never the bare provider message id -
+   * a bare id could resolve a quote against a different contact's message.
+   */
+  private quoteKey(chatId: string, messageId: string): string {
+    return JSON.stringify([chatId, messageId]);
+  }
   private currentState: PairingState = {
     state: 'disconnected',
     updatedAt: Date.now()
@@ -431,13 +456,9 @@ export class WhatsAppSocketClient {
           // Ignore status broadcasts
           if (raw.key.remoteJid === 'status@broadcast') continue;
 
-          // Cache raw message for replying/quoting
-          if (raw.key?.id && raw.message) {
-            this.rawMessages.set(raw.key.id, raw);
-            if (this.rawMessages.size > 500) {
-              const firstKey = this.rawMessages.keys().next().value;
-              if (firstKey) this.rawMessages.delete(firstKey);
-            }
+          // Cache raw message for replying/quoting (bounded, composite identity)
+          if (raw.key?.id && raw.key.remoteJid && raw.message) {
+            this.boundedCacheSet(this.rawMessages, this.quoteKey(raw.key.remoteJid, raw.key.id), raw, WhatsAppSocketClient.MAX_RAW_MESSAGES);
           }
 
           try {
@@ -459,12 +480,8 @@ export class WhatsAppSocketClient {
           if (!raw.message) continue;
           if (raw.key.remoteJid === 'status@broadcast') continue;
 
-          if (raw.key?.id && raw.message) {
-            this.rawMessages.set(raw.key.id, raw);
-            if (this.rawMessages.size > 500) {
-              const firstKey = this.rawMessages.keys().next().value;
-              if (firstKey) this.rawMessages.delete(firstKey);
-            }
+          if (raw.key?.id && raw.key.remoteJid && raw.message) {
+            this.boundedCacheSet(this.rawMessages, this.quoteKey(raw.key.remoteJid, raw.key.id), raw, WhatsAppSocketClient.MAX_RAW_MESSAGES);
           }
 
           try {
@@ -513,8 +530,8 @@ export class WhatsAppSocketClient {
           const phone = mapping?.[`${lidUser}_reverse`];
           if (phone) {
             const canonical = `${phone}@s.whatsapp.net`;
-            this.transportJids.set(canonical, jid);
-            this.transportJids.set(jid, canonical);
+            this.boundedCacheSet(this.transportJids, canonical, jid, WhatsAppSocketClient.MAX_TRANSPORT_JIDS);
+            this.boundedCacheSet(this.transportJids, jid, canonical, WhatsAppSocketClient.MAX_TRANSPORT_JIDS);
             return canonical;
           }
         }
@@ -523,11 +540,7 @@ export class WhatsAppSocketClient {
       }
     }
 
-    this.transportJids.set(normalized, jid);
-    if (this.transportJids.size > 1000) {
-      const first = this.transportJids.keys().next().value;
-      if (first) this.transportJids.delete(first);
-    }
+    this.boundedCacheSet(this.transportJids, normalized, jid, WhatsAppSocketClient.MAX_TRANSPORT_JIDS);
     return normalized;
   }
 
@@ -764,7 +777,7 @@ export class WhatsAppSocketClient {
     // Safely resolve quoted message: only pass if raw message is cached with authentic proto.IMessage
     let quoted: WAMessage | undefined = undefined;
     if (options.replyToMessageId) {
-      const cached = this.rawMessages.get(options.replyToMessageId);
+      const cached = this.rawMessages.get(this.quoteKey(targetJid, options.replyToMessageId));
       if (cached && cached.message) {
         quoted = cached;
       }
@@ -778,7 +791,7 @@ export class WhatsAppSocketClient {
       error.code = 'WHATSAPP_ACCEPTANCE_AMBIGUOUS';
       throw error;
     }
-    if (sent.message) this.rawMessages.set(messageId, sent);
+    if (sent.message) this.boundedCacheSet(this.rawMessages, this.quoteKey(targetJid, messageId), sent, WhatsAppSocketClient.MAX_RAW_MESSAGES);
     return { messageId };
   }
 
@@ -819,7 +832,7 @@ export class WhatsAppSocketClient {
     // Safely resolve quoted message if available
     let quoted: WAMessage | undefined = undefined;
     if (options.replyToMessageId) {
-      const cached = this.rawMessages.get(options.replyToMessageId);
+      const cached = this.rawMessages.get(this.quoteKey(targetJid, options.replyToMessageId));
       if (cached && cached.message) {
         quoted = cached;
       }
@@ -881,7 +894,7 @@ export class WhatsAppSocketClient {
     const targetJid = this.transportJids.get(chatId) || chatId;
     let quoted: WAMessage | undefined = undefined;
     if (options.replyToMessageId) {
-      const cached = this.rawMessages.get(options.replyToMessageId);
+      const cached = this.rawMessages.get(this.quoteKey(targetJid, options.replyToMessageId));
       if (cached && cached.message) {
         quoted = cached;
       }
