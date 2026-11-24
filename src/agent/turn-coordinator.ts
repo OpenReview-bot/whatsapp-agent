@@ -5,6 +5,7 @@ import type {AutonomousOperator} from './autonomous-operator';
 import type {InboundPlanner} from './inbound-planner';
 import type {JevRouteRequest, RoutingDecision} from '../ai/model-router';
 import {ConversationQueueError, ExecutionQueue} from './execution-queue';
+import {hashChatId, logEvent} from '../observability/safe-log';
 
 type DecisionResult=Awaited<ReturnType<ModeratorAgent['processInboundMessage']>>;
 type CoordinatorDependencies={
@@ -39,8 +40,11 @@ export class AgentTurnCoordinator {
         // A queued turn whose wait expired must never process next to the
         // still-active predecessor (WA-001/WA-002). Fail closed without any
         // side effect; durable recovery of dropped intake is WA-005's scope.
+        // Admission rejections stay distinguishable from wait timeouts and
+        // are logged server-side so operators see the pressure signal.
+        logEvent('warn', 'turn_queue_rejected', { chat: hashChatId(message.chatId), reason: err.reason });
         return {
-          decision:{action:'ignore',intent:'turn_queue_expired',reasoning:`Turn not started: ${err.message}`,confidence:1,simulatedDelayMs:0},
+          decision:{action:'ignore',intent: err.reason === 'admission_full' ? 'admission_full' : 'turn_queue_expired',reasoning:`Turn not started: ${err.message}`,confidence:1,simulatedDelayMs:0},
           shouldSendImmediately:false
         };
       }

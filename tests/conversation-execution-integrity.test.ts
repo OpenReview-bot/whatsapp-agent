@@ -53,6 +53,25 @@ function makeTurnCoordinator(
   );
 }
 
+describe('ExecutionQueue per-chat admission bound', () => {
+  it('rejects same-key callers beyond the per-chat bound until slots drain', async () => {
+    const { ExecutionQueue } = await import('../src/agent/execution-queue');
+    const queue = new ExecutionQueue({ timeoutMs: 10_000, maxQueuedPerKey: 2 });
+    const gate = deferred<void>();
+    const releaseOwner = await queue.acquire('chat1');
+    // First waiter chains behind the owner (slot 2 of 2).
+    const waiter = queue.acquire('chat1');
+    // Third unsettled slot exceeds the bound: rejected immediately.
+    await expect(queue.acquire('chat1')).rejects.toMatchObject({ reason: 'admission_full' });
+    releaseOwner();
+    await waiter.then((release) => release());
+    // Slots drained: the key admits again.
+    const release2 = await queue.acquire('chat1');
+    release2();
+    void gate;
+  });
+});
+
 describe('WA-002 ConversationCoordinator queue integrity', () => {
   it('an expired queued task never runs, and successors still wait for the active predecessor', async () => {
     const coordinator = new ConversationCoordinator({ timeoutMs: 80 });
@@ -225,8 +244,10 @@ describe('WA-001 AgentTurnCoordinator turn ownership', () => {
 
   it('discards the late result of an expired turn instead of publishing it', async () => {
     const gate = deferred<DecisionResult>();
+    let calls = 0;
     const coordinator = makeTurnCoordinator(async () => {
-      await gate.promise;
+      calls += 1;
+      if (calls === 1) await gate.promise;
       return replyResult;
     }, 30);
 
@@ -237,10 +258,11 @@ describe('WA-001 AgentTurnCoordinator turn ownership', () => {
     gate.resolve(replyResult);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // The chat is healthy again and the next message processes normally.
-    const coordinator2 = makeTurnCoordinator(async () => replyResult, 1000);
-    const r2 = await coordinator2.processInboundMessage(makeMessage('m2'));
+    // The SAME coordinator processes the next message normally: the expired
+    // turn kept ownership until it settled, then released it.
+    const r2 = await coordinator.processInboundMessage(makeMessage('m2'));
     expect(r2.decision.action).toBe('reply');
+    expect(calls).toBe(2);
   });
 
   it('ignores historical and replayed messages without queue interaction', async () => {
