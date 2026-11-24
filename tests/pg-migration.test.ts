@@ -56,11 +56,12 @@ describe('PostgreSQL migration contract', () => {
       store.saveMessage({id:'m-1',chatId:'123@s.whatsapp.net',sender:'123',text:'مرحبا',timestamp:1760000000000,isFromMe:false,type:'text'});
       store.close();
       // Exercise the original 16-table importer against its historical source contract.
-      // Current SQLite also creates S01, learning and WCF tables, all deliberately
+      // Current SQLite also creates S01, WA-005, learning and WCF tables, all deliberately
       // excluded from this legacy fixture so the fingerprint assertion stays valid.
       const historical = new Database(join(data, 'fable_whatsapp.db'));
       for (const name of [
         'send_intent_events', 'send_attempts', 'send_intents',
+        'inbound_jobs', 'inbound_job_events',
         'learning_states', 'learning_reflections',
         'conversation_fold_messages', 'conversation_fold_sources', 'conversation_folds'
       ]) {

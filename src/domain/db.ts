@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { SendLedger } from './send-ledger';
 import { FoldRepository } from './fold-repository';
+import { InboundJobLedger, type InboundJob } from './inbound-job-ledger';
 import type {
   AgentDraft,
   AgentMode,
@@ -42,6 +43,7 @@ export class SqliteStore {
   private db: Database;
   private dbPath: string;
   private sendLedger: SendLedger;
+  private inboundJobLedger: InboundJobLedger;
   private foldRepository: FoldRepository;
   private pendingStatuses = new Map<string, NonNullable<ChatMessage['status']>>();
 
@@ -57,6 +59,7 @@ export class SqliteStore {
     this.db = new Database(this.dbPath);
     this.init();
     this.sendLedger = new SendLedger(this.db);
+    this.inboundJobLedger = new InboundJobLedger(this.db);
     this.foldRepository = new FoldRepository(this.db);
 
     if (options.legacyDataDir) {
@@ -715,6 +718,43 @@ export class SqliteStore {
 
   getSendLedger(): SendLedger {
     return this.sendLedger;
+  }
+
+  getInboundJobLedger(): InboundJobLedger {
+    return this.inboundJobLedger;
+  }
+
+  /** Read-side handle for the durable inbound work ledger. */
+  get inboundJobs(): InboundJobLedger {
+    return this.inboundJobLedger;
+  }
+
+  /**
+   * WA-005: persist an inbound message and, when eligible, its response job
+   * in ONE transaction. A crash after this call can no longer leave the
+   * message stored with its work lost: the pending job survives and a
+   * recovery pass re-drives it exactly once.
+   */
+  saveInboundMessageWithJob(
+    msg: ChatMessage,
+    options: { createJob: boolean },
+    now = Date.now()
+  ): { message?: ChatMessage; job?: InboundJob; created: boolean; isNew: boolean } {
+    return this.db.transaction(() => {
+      // A replayed delivery must not re-run saveMessage (it would bump the
+      // chat unread counter and broadcast state the original delivery set).
+      const existing = this.getMessage(msg.chatId, msg.id);
+      if (!existing) this.saveMessage(msg);
+      const message = this.getMessage(msg.chatId, msg.id);
+      if (!message) return { message: undefined, created: false, isNew: false };
+      if (!options.createJob) return { message, created: false, isNew: !existing };
+      const { job, created } = this.inboundJobLedger.createJobInTransaction(message, now);
+      return { message, job, created, isNew: !existing };
+    }).immediate() as unknown as { message?: ChatMessage; job?: InboundJob; created: boolean; isNew: boolean };
+  }
+
+  closeForTesting(): void {
+    this.db.close();
   }
 
   /**
