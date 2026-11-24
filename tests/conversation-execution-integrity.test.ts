@@ -18,7 +18,6 @@ function deferred<T>() {
  * work; not a substitute for synchronization, only an upper bound on how
  * long we wait before asserting the work never started.
  */
-const NEGATIVE_WINDOW_MS = 90;
 
 const replyResult: DecisionResult = {
   decision: {

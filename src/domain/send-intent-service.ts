@@ -43,6 +43,7 @@ export interface MetaTemplateTransportRequest {
 export class SendIntentService {
   private readonly maxAttempts: number;
   private readonly retryBaseMs: number;
+  private readonly claimLeaseMs: number;
   private readonly random: () => number;
   private readonly workerId = randomUUID();
 
@@ -58,11 +59,13 @@ export class SendIntentService {
     brandId?: string;
     maxAttempts?: number;
     retryBaseMs?: number;
+    claimLeaseMs?: number;
     random?: () => number;
     publish?: (event: 'new_message' | 'send_intent', data: unknown) => void;
   }) {
     this.maxAttempts = Math.max(1, Math.min(10, options.maxAttempts ?? 3));
     this.retryBaseMs = Math.max(1, options.retryBaseMs ?? 1200);
+    this.claimLeaseMs = Math.max(1, options.claimLeaseMs ?? 30_000);
     this.random = options.random ?? Math.random;
     if (options.recipientDirectory && !options.brandId) {
       throw new Error('Configured recipient directory requires a trusted brand ID');
@@ -174,18 +177,71 @@ export class SendIntentService {
     }
   }
 
+  /**
+   * WA-015: persist every bubble of a split reply in one transaction before the first
+   * dispatch. A crash after commit replays to the same intents (idempotent per source ID),
+   * and the dispatcher's predecessor gate keeps the bubbles strictly ordered.
+   */
+  async createTextBatch(inputs: SendIntentInput[], now = Date.now()): Promise<Array<{ intent: SendIntent; created: boolean }>> {
+    if (!inputs.length) throw new Error('A reply batch requires at least one part');
+    for (const input of inputs) {
+      if (input.actionKind !== 'text') throw new Error('Reply batches carry text parts only');
+      this.requireAutopilotMode(input);
+    }
+    const captured = inputs.map((input) => this.captureRecipient(input));
+    const batch = this.options.memoryStore.getSendLedger().createTextBatch(captured, now);
+    for (const item of batch) {
+      if (item.created) this.observeCreated(item.intent);
+    }
+    return batch;
+  }
+
+  /**
+   * WA-004: fence between preparation and transport. The claim's lease must still be valid
+   * at the exact moment network I/O starts; an expired lease means a retry or the sweeper
+   * may own the intent, so this worker requeues it provably pre-network instead of sending
+   * a possible duplicate.
+   */
+  private fenceNetworkStart(id: string, attemptId: string, now = Date.now()): boolean {
+    const ledger = this.options.memoryStore.getSendLedger();
+    if (ledger.tryMarkNetworkStarted(id, attemptId, now)) return true;
+    const current = ledger.getIntent(id);
+    if (current?.state !== 'attempting') return false; // already recovered; leave it alone
+    const retryDelay = Math.min(60_000, this.retryBaseMs * 2 ** Math.min(current.attemptCount - 1, 8));
+    const jitter = 0.75 + Math.max(0, Math.min(1, this.random())) * 0.5;
+    const retryAt = now + Math.ceil(retryDelay * jitter);
+    const requeued = ledger.requeueFencedPreNetwork(id, attemptId, retryAt, this.maxAttempts, now);
+    if (requeued && requeued.state !== current.state) this.notify(requeued);
+    return false;
+  }
+
   async dispatch(id: string, now = Date.now()): Promise<SendResult> {
     const ledger = this.options.memoryStore.getSendLedger();
     const current = ledger.getIntent(id);
     if (!current) throw new Error('Send intent does not exist');
     if (current.state !== 'queued') return this.result(current);
 
+    // WA-015: a batch part may only dispatch after its predecessor reached the customer.
+    // An unfinished predecessor keeps the part queued; a failed one cancels the remainder,
+    // because a partial reply must not arrive out of order after a permanent gap.
+    const predecessor = ledger.batchPredecessor(id);
+    if (predecessor) {
+      if (predecessor.state === 'failed') {
+        const stopped = ledger.failQueued(id, 'predecessor_failed', now);
+        if (stopped) this.notify(stopped);
+        return this.result(ledger.getIntent(id)!);
+      }
+      if (!['accepted', 'delivered', 'read'].includes(predecessor.state)) {
+        return this.result(current);
+      }
+    }
+
     if (current.actionKind !== 'template' && current.sourceKind === 'autopilot' && this.options.memoryStore.getChat(current.chatId)?.agentMode !== 'autopilot') {
       const stopped = ledger.failQueued(id, 'chat_mode_revoked', now);
       if (stopped) this.notify(stopped);
       return this.result(stopped ?? ledger.getIntent(id)!);
     }
-    const claimed = ledger.claim(id, this.workerId, now);
+    const claimed = ledger.claim(id, this.workerId, now, this.claimLeaseMs);
     if (!claimed) return this.result(ledger.getIntent(id)!);
     const { intent, attempt } = claimed;
     this.notify(intent);
@@ -199,7 +255,9 @@ export class SendIntentService {
         }
         const audio = await this.options.prepareVoice(intent.text);
         const destination = this.destinationFor(intent);
-        ledger.markNetworkStarted(attempt.id);
+        if (!this.fenceNetworkStart(intent.id, attempt.id)) {
+          return this.result(ledger.getIntent(intent.id)!);
+        }
         this.observeStage(intent, 'sending', 'ok');
         whatsappCallMayHaveStarted = true;
         sent = await this.options.sendVoice(destination, audio, {
@@ -209,7 +267,9 @@ export class SendIntentService {
         const policy = await this.verifyTemplate(intent, Date.now());
         const destination = this.destinationFor(intent);
         if (!this.options.sendTemplate || !intent.template) throw new Error('Template adapter unavailable');
-        ledger.markNetworkStarted(attempt.id);
+        if (!this.fenceNetworkStart(intent.id, attempt.id)) {
+          return this.result(ledger.getIntent(intent.id)!);
+        }
         this.observeStage(intent, 'sending', 'ok');
         whatsappCallMayHaveStarted = true;
         sent = await this.options.sendTemplate({
@@ -219,7 +279,9 @@ export class SendIntentService {
         });
       } else {
         const destination = this.destinationFor(intent);
-        ledger.markNetworkStarted(attempt.id);
+        if (!this.fenceNetworkStart(intent.id, attempt.id)) {
+          return this.result(ledger.getIntent(intent.id)!);
+        }
         this.observeStage(intent, 'sending', 'ok');
         whatsappCallMayHaveStarted = true;
         sent = await this.options.sendText(destination, intent.text, {

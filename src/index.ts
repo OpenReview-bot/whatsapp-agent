@@ -220,22 +220,23 @@ export async function createFableWhatsAppAgent(options: {
             const bubbles = messageSplitter.split(result.decision.replyText!);
             console.log(`🤖 [Agent Auto-Reply] Replying in ${bubbles.length} natural bubble(s)...`);
 
-            for (let i = 0; i < bubbles.length; i++) {
-              const bubbleText = bubbles[i];
-              const isFirstBubble = i === 0;
-              const delay = messageSplitter.calculateDelay(bubbleText, isFirstBubble);
+            // WA-015: commit every bubble durably as one batch BEFORE the first dispatch.
+            // A crash mid-replay resumes from the ledger instead of re-splitting, and the
+            // predecessor gate keeps bubbles strictly ordered across retries.
+            const batch = await sendIntents.createTextBatch(bubbles.map((bubbleText, i) => ({
+              sourceKind: 'autopilot',
+              sourceId: `${fusedMsg.chatId}:${fusedMsg.id}:part-${i + 1}-of-${bubbles.length}`,
+              sourceRevision: 1,
+              actionKind: 'text' as const,
+              chatId: fusedMsg.chatId,
+              text: bubbleText,
+              replyToMessageId: i === 0 ? fusedMsg.id : undefined,
+              simulatedDelayMs: messageSplitter.calculateDelay(bubbleText, i === 0),
+              policyRevision: moderatorAgent.getPolicy().version
+            })));
 
-              const deliveryResult = await sendIntents.sendText({
-                sourceKind: 'autopilot',
-                sourceId: `${fusedMsg.chatId}:${fusedMsg.id}:part-${i + 1}-of-${bubbles.length}`,
-                sourceRevision: 1,
-                actionKind: 'text',
-                chatId: fusedMsg.chatId,
-                text: bubbleText,
-                replyToMessageId: isFirstBubble ? fusedMsg.id : undefined,
-                simulatedDelayMs: delay,
-                policyRevision: moderatorAgent.getPolicy().version
-              });
+            for (const part of batch) {
+              const deliveryResult = await sendIntents.dispatch(part.intent.id);
               if (!['accepted', 'delivered', 'read'].includes(deliveryResult.intent.state)) {
                 console.warn('[Delivery] Stopped remaining bubbles after a pending send', deliveryResult.intent.state);
                 break;
