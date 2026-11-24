@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { WhatsAppSocketClient, classifyDisconnect } from '../src/transport/whatsapp-socket';
 
@@ -209,7 +210,8 @@ describe('WA-014 reconnect classification and bounded retry lifecycle', () => {
 });
 
 describe('WA-014 patch-baileys compatibility guard', () => {
-  const REPO = '/workspaces/wa-81-82';
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  // Repo root derived from this file's location (worktree-agnostic).
 
   function makeFixture(version: string, validator: string): string {
     const dir = tmp();

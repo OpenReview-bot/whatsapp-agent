@@ -5,6 +5,7 @@ import { WhatsApp } from '@lobehub/ui/icons';
 import { Badge as AstryxBadge } from '@astryxdesign/core/Badge';
 import { StatusDot } from '@astryxdesign/core/StatusDot';
 import { api } from './api/client';
+import { ChatRequestCoordinator } from './lib/chat-request-coordinator';
 import type { AgentDecision, AgentDraft, AgentMode, ChatMessage, ChatSummary, ModeratorPersona, PolicyConfig, SystemStatus } from './api/types';
 import { ChatList } from './components/ChatList';
 import { BrandBrainPage } from './components/BrandBrainPage';
@@ -43,6 +44,8 @@ export function App() {
 
   // Ref to always have the latest selectedChatId in SSE and polling callbacks
   const selectedChatIdRef = useRef<string | undefined>(selectedChatId);
+  // WA-020: generation-gated request cycles; stale responses never apply.
+  const messageSyncRef = useRef(new ChatRequestCoordinator());
   useEffect(() => {
     selectedChatIdRef.current = selectedChatId;
   }, [selectedChatId]);
@@ -119,14 +122,24 @@ export function App() {
   useEffect(() => {
     if (!selectedChatId) return;
 
+    // WA-020: begin a new request cycle; the previous chat's outstanding
+    // fetches are aborted and their late responses are ignored.
+    const sync = messageSyncRef.current;
+    const token = sync.begin(selectedChatId);
+
     // Immediately fetch messages when chat is selected
-    api.getMessages(selectedChatId).then((res) => {
+    api.getMessages(selectedChatId, { signal: token.signal }).then((res) => {
+      if (!sync.isCurrent(token)) return;
       setMessages(res.messages || []);
-    }).catch(console.error);
+    }).catch((err) => {
+      if (!token.signal.aborted) console.error(err);
+    });
 
     const harvestTimer = setInterval(async () => {
+      if (!sync.isCurrent(token)) return;
       try {
-        const res = await api.getMessages(selectedChatId);
+        const res = await api.getMessages(selectedChatId, { signal: token.signal });
+        if (!sync.isCurrent(token)) return;
         if (res.messages && Array.isArray(res.messages)) {
           setMessages((prev) => {
             if (prev.length !== res.messages.length) return res.messages;
@@ -146,11 +159,14 @@ export function App() {
           });
         }
       } catch (err) {
-        console.debug('[App] Background message sync:', err);
+        if (!token.signal.aborted) console.debug('[App] Background message sync:', err);
       }
     }, 15000);
 
-    return () => clearInterval(harvestTimer);
+    return () => {
+      clearInterval(harvestTimer);
+      sync.cancelAll();
+    };
   }, [selectedChatId]);
 
   // Periodic Chat List Drift-Sync: Low-frequency background sync (15s)
@@ -239,7 +255,11 @@ export function App() {
       try {
         const data = JSON.parse(e.data) as { chatId: string };
         if (data.chatId !== selectedChatIdRef.current) return;
-        void api.getMessages(data.chatId).then((response) => setMessages(response.messages)).catch((error) => {
+        void api.getMessages(data.chatId).then((response) => {
+          // The selection may have changed while the fetch was in flight.
+          if (selectedChatIdRef.current !== data.chatId) return;
+          setMessages(response.messages);
+        }).catch((error) => {
           console.warn('[Delivery] Could not refresh message states:', error);
         });
       } catch {
@@ -347,16 +367,21 @@ export function App() {
   // Handlers
   const handleSendMessage = async (text: string, replyToMessageId?: string, clientMutationId?: string) => {
     if (!selectedChatId) return;
-    const res = await api.sendMessage(selectedChatId, text, replyToMessageId, clientMutationId);
-    const latest = await api.getMessages(selectedChatId);
+    const chatId = selectedChatId;
+    const res = await api.sendMessage(chatId, text, replyToMessageId, clientMutationId);
+    const latest = await api.getMessages(chatId);
+    // Ignore the refresh if the user switched chats while the send was in flight.
+    if (selectedChatIdRef.current !== chatId) return;
     setMessages(latest.messages);
     if (res.state === 'failed') throw new Error('Send failed before reaching WhatsApp');
   };
 
   const handleRetrySendIntent = async (intentId: string, clientMutationId: string) => {
     if (!selectedChatId) return;
+    const chatId = selectedChatId;
     await api.retrySendIntent(intentId, clientMutationId);
-    const latest = await api.getMessages(selectedChatId);
+    const latest = await api.getMessages(chatId);
+    if (selectedChatIdRef.current !== chatId) return;
     setMessages(latest.messages);
   };
 

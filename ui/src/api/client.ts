@@ -122,8 +122,8 @@ export const api = {
     return handleResponse<{ chats: ChatSummary[] }>(res, 'Failed to list chats');
   },
 
-  async getMessages(chatId: string): Promise<{ messages: ChatMessage[] }> {
-    const res = await fetch(`${BASE_URL}/chats/${encodeURIComponent(chatId)}/messages`);
+  async getMessages(chatId: string, options?: { signal?: AbortSignal }): Promise<{ messages: ChatMessage[] }> {
+    const res = await fetch(`${BASE_URL}/chats/${encodeURIComponent(chatId)}/messages`, { signal: options?.signal });
     return handleResponse<{ messages: ChatMessage[] }>(res, 'Failed to fetch messages');
   },
 
