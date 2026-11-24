@@ -33,7 +33,11 @@ export const SSE_KEEP_ALIVE_MS = 5000;
 
 export interface ApiDependencies {
   memoryStore: MemoryStore;
-  whatsappClient: WhatsAppSocketClient;
+  whatsappClient?: WhatsAppSocketClient;
+  /** WA-023: explicit profile state for capability reporting and disabled responses. */
+  runtimeProfile?: string;
+  capabilityMatrix?: Array<{ capability: string; enabled: boolean; reason: string }>;
+  funnelDisabled?: boolean;
   moderatorAgent: ModeratorAgent;
   sse: SSEBroadcaster;
   audioTranscriber?: AudioTranscriber;
@@ -57,16 +61,21 @@ export function createApiServer(deps: ApiDependencies): Hono {
   const getDelivery = () => delivery ??= new SendIntentService({
     memoryStore: deps.memoryStore,
     diagnostics: deps.diagnostics,
-    sendText: (chatId, text, options) => deps.whatsappClient.sendMessage(chatId, text, options),
+    sendText: (chatId, text, options) => {
+      if (!deps.whatsappClient) throw new Error('Baileys transport is not enabled in this runtime profile');
+      return deps.whatsappClient.sendMessage(chatId, text, options);
+    },
     prepareVoice: deps.voiceSynthesizer
       ? (text) => deps.voiceSynthesizer!.synthesizeVoice(text, deps.moderatorAgent.getPersona().voiceName)
       : undefined,
-    sendVoice: deps.voiceSynthesizer
-      ? (chatId, audio, options) => deps.whatsappClient.sendVoiceNote(chatId, audio, { replyToMessageId: options?.replyToMessageId })
+    sendVoice: deps.voiceSynthesizer && deps.whatsappClient
+      ? (chatId, audio, options) => deps.whatsappClient!.sendVoiceNote(chatId, audio, { replyToMessageId: options?.replyToMessageId })
       : undefined,
     publish: (event, data) => deps.sse.broadcast(event, data)
   });
-  const funnelEngine = deps.funnelEngine ?? createDefaultFunnelEngine();
+  // WA-023: when the profile disables the funnel, routes answer with explicit disabled
+  // responses instead of silently creating an engine.
+  const funnelEngine = deps.funnelDisabled ? undefined : (deps.funnelEngine ?? createDefaultFunnelEngine());
 
   // Only configured origins may issue browser mutations or read cross-origin API responses.
   // CLI/service callers without a browser Origin remain supported; bind the server to loopback by default.
@@ -154,6 +163,14 @@ export function createApiServer(deps: ApiDependencies): Hono {
 
   // Status & Connection
   app.get('/api/status', (c) => {
+    if (!deps.whatsappClient) {
+      return c.json({
+        state: 'disabled',
+        transportMode: deps.transportMode ?? 'baileys',
+        metaCloudConfigured: deps.transportMode === 'meta-cloud',
+        reason: 'Baileys transport is not enabled in this runtime profile'
+      });
+    }
     const state = deps.whatsappClient.getState();
     const pendingDrafts = deps.memoryStore.getPendingDrafts();
     return c.json({
@@ -161,6 +178,14 @@ export function createApiServer(deps: ApiDependencies): Hono {
       transportMode: deps.transportMode ?? 'baileys',
       metaCloudConfigured: deps.transportMode === 'meta-cloud',
       pendingDraftsCount: pendingDrafts.length
+    });
+  });
+
+  // WA-023: capability matrix for the active runtime profile
+  app.get('/api/runtime/capabilities', (c) => {
+    return c.json({
+      profile: deps.runtimeProfile ?? 'FULL',
+      capabilities: deps.capabilityMatrix ?? []
     });
   });
 
@@ -177,6 +202,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
     const body = await c.req.json().catch(() => ({}));
     const phone = body.pairingPhoneNumber ? String(body.pairingPhoneNumber) : undefined;
     const refresh = Boolean(body.refresh);
+    if (!deps.whatsappClient) {
+      return c.json({ error: 'Baileys pairing is not enabled in this runtime profile' }, 503);
+    }
     void deps.whatsappClient.start(phone, { refresh });
     return c.json({ status: 'initiated', phone, refresh });
   });
@@ -186,6 +214,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
       return c.json({ error: 'Baileys disconnect is disabled in Meta Cloud transport mode' }, 409);
     }
     const body = await c.req.json().catch(() => ({}));
+    if (!deps.whatsappClient) {
+      return c.json({ error: 'Baileys disconnect is not enabled in this runtime profile' }, 503);
+    }
     const clearSession = body.clearSession !== false;
     await deps.whatsappClient.disconnect(clearSession);
     return c.json({ status: 'disconnected' });
@@ -747,6 +778,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
 
   // Funnel Engine Routes (Scatter-Gather & Hedged Dispatches)
   app.get('/api/funnel/methods', (c) => {
+    if (!funnelEngine) {
+      return c.json({ error: 'Funnel engine is disabled in this runtime profile' }, 503);
+    }
     // Unauthenticated route: never expose per-target credentials.
     const methods = funnelEngine.registry.listMethods().map((m) => ({
       ...m,
@@ -762,6 +796,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
   app.post('/api/funnel/methods', async (c) => {
     const authHeader = c.req.header('authorization') || c.req.header('x-api-key');
     const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+    if (!funnelEngine) {
+      return c.json({ error: 'Funnel engine is disabled in this runtime profile' }, 503);
+    }
     if (!funnelEngine.registry.validateKey(token)) {
       return c.json({ error: 'Unauthorized: Invalid funnel API key' }, 401);
     }
@@ -776,6 +813,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
   app.post('/api/funnel/dispatch', async (c) => {
     const authHeader = c.req.header('authorization') || c.req.header('x-api-key');
     const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+    if (!funnelEngine) {
+      return c.json({ error: 'Funnel engine is disabled in this runtime profile' }, 503);
+    }
     if (!funnelEngine.registry.validateKey(token)) {
       return c.json({ error: 'Unauthorized: Invalid funnel API key' }, 401);
     }

@@ -27,6 +27,7 @@ import { ContactIdentityDirectory } from './identity/contact-directory';
 import { createDefaultFunnelEngine } from './funnel/default-engine';
 import { DualMemoryManager } from './domain/learning-memory';
 import { ReflectionEngine } from './ai/reflection-engine';
+import { resolveRuntimeProfile, capabilityMatrix } from './runtime-profile';
 import { ReflectionWorker } from './agent/reflection-worker';
 import { PostgresLearningStore } from './persistence/postgres/learning-store';
 import { resolveLearningMirror } from './persistence/learning-mirror-config';
@@ -44,6 +45,8 @@ export async function createFableWhatsAppAgent(options: {
   capabilityAutopilotBrandId?: string;
   capabilityModel?: Pick<GeminiClient,'generateContent'>;
   transport?: 'baileys' | 'meta-cloud';
+  /** WA-023: explicit runtime profile. Defaults to FULL (current behavior). */
+  runtimeProfile?: string;
   metaCloud?: { config: MetaCloudApiConfig; fetch?: typeof fetch; now?: () => number };
   plannerEnv?: Readonly<Record<string, string | undefined>>;
   /** Trusted owner/business data source. No proactive sends when absent. */
@@ -57,6 +60,7 @@ export async function createFableWhatsAppAgent(options: {
   if (transportMode !== 'baileys' && transportMode !== 'meta-cloud') {
     throw new Error('Unsupported WhatsApp transport mode');
   }
+  const runtimeProfile = resolveRuntimeProfile(options.runtimeProfile);
   const brandId = options.capabilityAutopilotBrandId ?? process.env.AGENT_AUTOPILOT_BRAND_ID;
   const metaConfig = options.metaCloud?.config ?? {
     graphVersion: process.env.META_CLOUD_GRAPH_VERSION ?? '',
@@ -80,7 +84,7 @@ export async function createFableWhatsAppAgent(options: {
   const geminiClient = new GeminiClient();
   const capabilities = createCapabilities(dataDir, options.capabilityModel ?? geminiClient);
   const audioTranscriber = new AudioTranscriber(geminiClient);
-  const voiceSynthesizer = new VoiceSynthesizer();
+  const voiceSynthesizer = runtimeProfile.voiceEnabled ? new VoiceSynthesizer() : undefined;
   const rateLimiter = new HumanRateLimiter({
     minDelayMs: 1500,
     maxDelayMs: 4500
@@ -114,17 +118,22 @@ export async function createFableWhatsAppAgent(options: {
   });
   await dualMemoryManager.hydrateFromPersistence();
 
-  const reflectionEngine = new ReflectionEngine(geminiClient, dualMemoryManager);
-
-  const reflectionWorker = new ReflectionWorker({
-    memoryStore,
-    memoryManager: dualMemoryManager,
-    reflectionEngine,
-    persistenceStore: postgresLearningStore,
-    brandId: options.capabilityAutopilotBrandId ?? process.env.AGENT_AUTOPILOT_BRAND_ID ?? 'default',
-    idleThresholdMs: 15 * 60 * 1000 // 15 mins cold thread threshold
-  });
-  reflectionWorker.startPeriodicSweep(60_000);
+  // WA-023: reflection owns a periodic sweep timer; construct it only when the profile
+  // enables the capability so CORE_MINIMAL boots with no reflection timers or workers.
+  let reflectionEngine: ReflectionEngine | undefined;
+  let reflectionWorker: ReflectionWorker | undefined;
+  if (runtimeProfile.reflectionEnabled) {
+    reflectionEngine = new ReflectionEngine(geminiClient, dualMemoryManager);
+    reflectionWorker = new ReflectionWorker({
+      memoryStore,
+      memoryManager: dualMemoryManager,
+      reflectionEngine,
+      persistenceStore: postgresLearningStore,
+      brandId: options.capabilityAutopilotBrandId ?? process.env.AGENT_AUTOPILOT_BRAND_ID ?? 'default',
+      idleThresholdMs: 15 * 60 * 1000 // 15 mins cold thread threshold
+    });
+    reflectionWorker.startPeriodicSweep(60_000);
+  }
 
   const moderatorAgent = new ModeratorAgent(geminiClient, memoryStore, {
     rateLimiter,
@@ -148,7 +157,7 @@ export async function createFableWhatsAppAgent(options: {
     enabled: process.env.AGENT_CAPABILITIES_AUTOPILOT === '1' || Boolean(options.capabilityAutopilotBrandId)
   });
 
-  let whatsappClient: WhatsAppSocketClient;
+  let whatsappClient: WhatsAppSocketClient | undefined;
   let sendIntents: SendIntentService;
   let proactiveScheduler: ProactiveEngagementScheduler | undefined;
 
@@ -194,7 +203,7 @@ export async function createFableWhatsAppAgent(options: {
             // 1. Send out-of-band immediate reaction if suggested
             if (result.decision.suggestedReaction) {
               try {
-                await whatsappClient.sendReaction(fusedMsg.chatId, fusedMsg.id, result.decision.suggestedReaction);
+                await whatsappClient?.sendReaction(fusedMsg.chatId, fusedMsg.id, result.decision.suggestedReaction);
                 memoryStore.addReaction(fusedMsg.chatId, fusedMsg.id, result.decision.suggestedReaction);
                 sse.broadcast('message_reaction', {
                   chatId: fusedMsg.chatId,
@@ -300,7 +309,7 @@ export async function createFableWhatsAppAgent(options: {
     // without a job, exactly as before.
     let eligible = !msg.isFromMe && !delivery?.historical;
     if (eligible && transportMode === 'baileys') {
-      const ownPhone = whatsappClient.getState().connectedUser?.phone;
+      const ownPhone = whatsappClient?.getState().connectedUser?.phone;
       if (ownPhone && msg.chatId.startsWith(ownPhone)) eligible = false;
     }
 
@@ -343,7 +352,10 @@ export async function createFableWhatsAppAgent(options: {
   const inboundRecoveryTimer = setInterval(recoverInboundJobs, 5000);
   inboundRecoveryTimer.unref();
 
-  whatsappClient = new WhatsAppSocketClient({
+  // WA-023: the Baileys wrapper exists only for the Baileys transport. Meta mode never
+  // constructs it, in any profile.
+  if (runtimeProfile.baileysWrapperEnabled(transportMode)) {
+    whatsappClient = new WhatsAppSocketClient({
     sessionDir: `${dataDir}/session`,
     audioTranscriber,
     onStateChange: (state) => {
@@ -364,7 +376,8 @@ export async function createFableWhatsAppAgent(options: {
       sse.broadcast('chat_updated', { chatId });
     },
     onMessage: handleInboundMessage
-  });
+    });
+  }
 
   const handleMetaEvent = async (event: MetaCloudWebhookEvent): Promise<void> => {
     if (event.kind === 'inbound_text') {
@@ -467,16 +480,19 @@ export async function createFableWhatsAppAgent(options: {
       ? verifyProactiveTemplateAuthorization
       : undefined,
     sendText: (chatId, text, sendOptions) => {
-      if (!metaClient) return whatsappClient.sendMessage(chatId, text, sendOptions);
+      if (!metaClient) {
+        if (!whatsappClient) throw new Error('Baileys transport is not enabled in this runtime profile');
+        return whatsappClient.sendMessage(chatId, text, sendOptions);
+      }
       const lastInboundAtMs = memoryStore.getMessages(chatId, 100)
         .filter(message => !message.isFromMe)
         .reduce((latest, message) => Math.max(latest, message.timestamp), 0);
       return metaClient.sendText({ to: chatId, text, lastInboundAtMs });
     },
-    prepareVoice: transportMode === 'baileys'
+    prepareVoice: transportMode === 'baileys' && voiceSynthesizer
       ? (text) => voiceSynthesizer.synthesizeVoice(text, moderatorAgent.getPersona().voiceName)
       : undefined,
-    sendVoice: transportMode === 'baileys'
+    sendVoice: transportMode === 'baileys' && voiceSynthesizer && whatsappClient
       ? (chatId, audio, sendOptions) => whatsappClient.sendVoiceNote(chatId, audio, {
         replyToMessageId: sendOptions?.replyToMessageId
       })
@@ -486,7 +502,7 @@ export async function createFableWhatsAppAgent(options: {
 
   // Proactive delivery is opt-in at runtime: a trusted source must provide live
   // consent, template approval and workflow relevance for every actual send.
-  if (metaClient && recipientDirectory && brandId && options.proactiveEligibility) {
+  if (runtimeProfile.proactiveEnabled && metaClient && recipientDirectory && brandId && options.proactiveEligibility) {
     proactiveScheduler = new ProactiveEngagementScheduler({
       store: capabilities.followups,
       eligibility: options.proactiveEligibility,
@@ -547,8 +563,8 @@ export async function createFableWhatsAppAgent(options: {
     });
   }
 
-  // Initialize Scatter-Gather Funnel Engine
-  const funnelEngine = createDefaultFunnelEngine({ port });
+  // Initialize Scatter-Gather Funnel Engine (WA-023: only when the profile enables it)
+  const funnelEngine = runtimeProfile.funnelEnabled ? createDefaultFunnelEngine({ port }) : undefined;
 
   // Create API App
   const app = createApiServer({
@@ -565,7 +581,10 @@ export async function createFableWhatsAppAgent(options: {
     dualMemoryManager,
     reflectionWorker,
     reflectionEngine,
-    transportMode
+    transportMode,
+    runtimeProfile: runtimeProfile.name,
+    capabilityMatrix: capabilityMatrix(runtimeProfile, transportMode),
+    funnelDisabled: !runtimeProfile.funnelEnabled
   });
 
   registerCapabilityRoutes(app, capabilities, options.capabilityToken ?? process.env.AGENT_CAPABILITIES_OWNER_TOKEN ?? '');
@@ -585,12 +604,12 @@ export async function createFableWhatsAppAgent(options: {
   let deliveryRetryTimer: ReturnType<typeof setInterval> | undefined;
   if (options.autoConnect) {
     deliveryRetryTimer = setInterval(() => {
-      if (metaClient || whatsappClient.getState().state === 'connected') {
+      if (metaClient || whatsappClient?.getState().state === 'connected') {
         void sendIntents.dispatchDue().catch((error) => console.warn('[Delivery] Retry scan failed:', describeError(error)));
       }
     }, 5000);
     deliveryRetryTimer.unref();
-    if (!metaClient) void whatsappClient.start();
+    if (whatsappClient) void whatsappClient.start();
   }
 
   const shutdown = async () => {
@@ -609,7 +628,7 @@ export async function createFableWhatsAppAgent(options: {
     }
     sse.close();
     if (transportMode === 'baileys') {
-      await whatsappClient.disconnect(false);
+      await whatsappClient?.disconnect(false);
     }
     memoryStore.close();
     recipientDirectory?.close();
@@ -649,6 +668,8 @@ export async function createFableWhatsAppAgent(options: {
     memoryStore,
     whatsappClient,
     metaClient,
+    runtimeProfile: runtimeProfile.name,
+    capabilityMatrix: capabilityMatrix(runtimeProfile, transportMode),
     recipientDirectory,
     transportMode,
     moderatorAgent,
