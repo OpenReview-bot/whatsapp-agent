@@ -181,7 +181,7 @@ export async function createFableWhatsAppAgent(options: {
 
       logEvent('info', 'burst_fused', describeBurst(fusedMsg));
 
-      reflectionWorker.recordActivity(fusedMsg.chatId, fusedMsg.timestamp);
+      reflectionWorker?.recordActivity(fusedMsg.chatId, fusedMsg.timestamp);
 
       try {
         const result = await coordinator.processInboundMessage(fusedMsg);
@@ -615,7 +615,7 @@ export async function createFableWhatsAppAgent(options: {
   const shutdown = async () => {
     if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
     clearInterval(inboundRecoveryTimer);
-    await reflectionWorker.stopPeriodicSweep();
+    await reflectionWorker?.stopPeriodicSweep();
     proactiveAbort?.abort();
     // WA-008: drain and retry outstanding learning-state writes before closing stores.
     await dualMemoryManager.flushPendingWrites();
@@ -637,7 +637,7 @@ export async function createFableWhatsAppAgent(options: {
 
   const unregSchedulers = defaultLifecycle.register('schedulers', 'stop_ingestion', async () => {
     if (deliveryRetryTimer) clearInterval(deliveryRetryTimer);
-    await reflectionWorker.stopPeriodicSweep();
+    await reflectionWorker?.stopPeriodicSweep();
     proactiveAbort?.abort();
   });
   const unregBurst = defaultLifecycle.register('burst_queue', 'drain_queues', async () => {
@@ -651,7 +651,7 @@ export async function createFableWhatsAppAgent(options: {
   const unregTransport = defaultLifecycle.register('transport', 'disconnect_transport', async () => {
     sse.close();
     if (transportMode === 'baileys') {
-      await whatsappClient.disconnect(false);
+      await whatsappClient?.disconnect(false);
     }
   });
   const unregDatastores = defaultLifecycle.register('datastores', 'close_datastores', async () => {

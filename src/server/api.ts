@@ -383,6 +383,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
     if (!messageId || !emoji) {
       return c.json({ error: 'messageId and emoji are required' }, 400);
     }
+    if (!deps.whatsappClient) {
+      return c.json({ error: 'Baileys transport is not enabled in this runtime profile' }, 503);
+    }
     await deps.whatsappClient.sendReaction(chatId, messageId, emoji);
     return c.json({ success: true });
   });
@@ -877,6 +880,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
   });
 
   app.get('/api/funnel/stats', (c) => {
+    if (!funnelEngine) {
+      return c.json({ error: 'Funnel engine is disabled in this runtime profile' }, 503);
+    }
     return c.json({
       circuitBreakers: funnelEngine.getCircuitBreakerStats(),
       activeMethodsCount: funnelEngine.registry.listMethods().length
@@ -886,6 +892,9 @@ export function createApiServer(deps: ApiDependencies): Hono {
   app.post('/api/funnel/circuit-breaker/reset', async (c) => {
     const authHeader = c.req.header('authorization') || c.req.header('x-api-key');
     const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+    if (!funnelEngine) {
+      return c.json({ error: 'Funnel engine is disabled in this runtime profile' }, 503);
+    }
     if (!funnelEngine.registry.validateKey(token)) {
       return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -950,11 +959,11 @@ export function createApiServer(deps: ApiDependencies): Hono {
 
   app.get('/api/workspace/stats', (c) => {
     const stats = deps.memoryStore.getStorageStats();
-    const wsState = deps.whatsappClient.getState();
+    const wsState = deps.whatsappClient?.getState();
     return c.json({
       ...stats,
-      connectionState: wsState.state,
-      connectedUser: wsState.connectedUser,
+      connectionState: wsState?.state ?? null,
+      connectedUser: wsState?.connectedUser ?? null,
       transportMode: deps.transportMode ?? 'baileys'
     });
   });
@@ -974,7 +983,7 @@ export function createApiServer(deps: ApiDependencies): Hono {
     const target = String(body?.target || 'all');
 
     if (target === 'all') {
-      await deps.whatsappClient.disconnect(true);
+      await deps.whatsappClient?.disconnect(true);
       const resetResult = deps.memoryStore.resetAll();
       deps.dualMemoryManager?.resetLearning();
       const cleanResult = cleanWorkspaceData(getWorkspaceDataDir());
@@ -988,7 +997,7 @@ export function createApiServer(deps: ApiDependencies): Hono {
     }
 
     if (target === 'session') {
-      await deps.whatsappClient.disconnect(true);
+      await deps.whatsappClient?.disconnect(true);
       deps.sse.broadcast('workspace_reset', { target: 'session' });
       return c.json({ success: true, target: 'session' });
     }
