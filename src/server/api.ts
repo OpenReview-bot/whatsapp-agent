@@ -141,7 +141,12 @@ export function createApiServer(deps: ApiDependencies): Hono {
       ? deps.whatsappClient.getState()
       : { state: 'disconnected' };
     const transportMode = deps.transportMode ?? 'baileys';
-    const isReady = dbOk;
+    // WA-010: readiness must reflect the serving channel, not the datastore
+    // alone. Baileys serves only when connected; meta-cloud is a stateless
+    // webhook channel, so mode configuration is the readiness signal and
+    // outbound credential validity is enforced per send.
+    const channelReady = transportMode === 'meta-cloud' ? true : state.state === 'connected';
+    const isReady = dbOk && channelReady;
 
     const payload = {
       status: isReady ? 'ready' : 'unready',
@@ -150,7 +155,8 @@ export function createApiServer(deps: ApiDependencies): Hono {
         chatsCount,
         transport: {
           mode: transportMode,
-          state: state.state
+          state: state.state,
+          ready: channelReady
         }
       },
       timestamp: Date.now()
