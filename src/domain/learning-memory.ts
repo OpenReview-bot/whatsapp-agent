@@ -1,3 +1,4 @@
+import { describeErrorDetail } from '../observability/safe-log';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SqliteStore } from './db';
@@ -178,7 +179,7 @@ export class DualMemoryManager {
       await this.hydrateOne('workbook');
       await this.hydrateOne('notebook');
     } catch (err: unknown) {
-      console.warn('⚠️ [DualMemoryManager] Could not hydrate from persistence store:', err);
+      console.warn('⚠️ [DualMemoryManager] Could not hydrate from persistence store:', describeErrorDetail(err));
     }
   }
 
@@ -598,7 +599,7 @@ export class DualMemoryManager {
       }
       return true;
     } catch (err: any) {
-      console.warn('⚠️ [DualMemoryManager] Failed to sync from persistence store:', err.message);
+      console.warn('⚠️ [DualMemoryManager] Failed to sync from persistence store:', describeErrorDetail(err));
       return false;
     }
   }
